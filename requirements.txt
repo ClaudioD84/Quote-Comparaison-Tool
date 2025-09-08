@@ -1,11 +1,11 @@
-annotations
-io
-re
-sys
-logging
-datetime
-math
-streamlit
+streamlit>=1.25
 pandas
 numpy
 pdfplumber
+openpyxl
+xlsxwriter
+python-dateutil
+PyPDF2
+# optional fallbacks:
+camelot-py[cv]
+tabula-py
