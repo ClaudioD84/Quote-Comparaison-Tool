@@ -1244,15 +1244,20 @@ else:
             st.write(entry)
 
     # Excel export
-    st.markdown("### Export results")
-    if len(offers_normalized) >= 2:
-        try:
-            excel_bytes = build_excel(comp_df, offers_normalized, assumptions)
-            st.download_button("Download comparison.xlsx", data=excel_bytes, file_name="comparison.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-            st.success("Excel generated in-memory. First sheet = Winner Analysis; subsequent sheets per vendor.")
-        except Exception as e:
-            st.error(f"Failed to generate Excel: {e}")
-            log_ui("error", f"Excel generation error: {e}")
+st.markdown("### Export results")
+if len(offers_normalized) >= 2:
+    try:
+        excel_bytes = build_excel(comp_df, offers_normalized, assumptions)
+        st.download_button(
+            "Download comparison.xlsx",
+            data=excel_bytes,
+            file_name="comparison.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+        st.success("Excel generated in-memory. First sheet = Winner Analysis; subsequent sheets per vendor.")
+    except Exception as e:
+        st.error(f"Failed to generate Excel: {e}")
+        log_ui("error", f"Excel generation error: {e}")
 else:
     st.info("Upload PDFs or load demo data to begin.")
 
