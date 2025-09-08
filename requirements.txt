@@ -1,11 +1,7 @@
-streamlit>=1.25
+streamlit
 pandas
 numpy
 pdfplumber
-openpyxl
-xlsxwriter
 python-dateutil
-PyPDF2
-# optional fallbacks:
-camelot-py[cv]
-tabula-py
+xlsxwriter
+requests
