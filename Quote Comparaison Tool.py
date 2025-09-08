@@ -229,6 +229,14 @@ class OfferComparator:
             })
         return sorted(results, key=lambda x: x.get('total_contract_cost', float('inf')))
 
+    def generate_comparison_report(self) -> pd.DataFrame:
+        """Generate detailed comparison DataFrame"""
+        cost_data = self.calculate_total_costs()
+        df = pd.DataFrame(cost_data)
+        if not df.empty:
+            df['rank'] = df['total_contract_cost'].rank(method='min').astype(int)
+        return df
+
 def main():
     """Main function to run the Streamlit app"""
     st.set_page_config(page_title="Fleet Leasing Offer Comparator", page_icon="🚗", layout="wide")
@@ -324,7 +332,6 @@ def process_offers(uploaded_files, config):
             st.error(f"• {error}")
         return
     
-    comparison_df = pd.DataFrame([asdict(o) for o in offers])
     comparison_df = comparator.generate_comparison_report()
     display_comparison_results(comparison_df)
     
