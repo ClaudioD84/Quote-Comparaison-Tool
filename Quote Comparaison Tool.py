@@ -28,7 +28,7 @@ import numpy as np
 import pdfplumber
 from dateutil import parser as dateparser
 
-# Optional imports with graceful fallbacks
+# Optional imports with graceful fallbacks for advanced parsing
 try:
     import camelot
     HAS_CAMELOT = True
@@ -45,6 +45,7 @@ except ImportError:
 # Configure logging
 @st.cache_resource
 def setup_logging():
+    """Sets up a Streamlit-friendly logger."""
     logger = logging.getLogger("leasing_comparator")
     logger.setLevel(logging.INFO)
     
@@ -64,6 +65,7 @@ CURRENCY_SYMBOLS = {
     "$": "USD", "USD": "USD", "CHF": "CHF"
 }
 
+# Regex pattern for numbers
 NUMBER_PATTERN = re.compile(r"[-+]?\d{1,3}(?:[.,\s]\d{3})*(?:[.,]\d+)?|\d+(?:[.,]\d+)?")
 
 @dataclass
@@ -96,6 +98,7 @@ class ParsedOffer:
     parsing_confidence: float = 0.0
     warnings: List[str] = field(default_factory=list)
     is_scanned: bool = False
+    parsed_tables: List[pd.DataFrame] = field(default_factory=list)
 
 class TextProcessor:
     """Handles text extraction and normalization"""
@@ -105,20 +108,11 @@ class TextProcessor:
         """Extract text from PDF, return (text, is_scanned)"""
         try:
             with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-                pages_text = []
-                for page in pdf.pages:
-                    try:
-                        text = page.extract_text() or ""
-                        pages_text.append(text)
-                    except Exception as e:
-                        logger.warning(f"Failed to extract text from page: {e}")
-                        pages_text.append("")
-                
+                pages_text = [page.extract_text() or "" for page in pdf.pages]
                 full_text = "\n".join(pages_text)
-                is_scanned = len(full_text.strip()) < 50  # Heuristic for scanned PDFs
-                
+                # Heuristic for scanned PDFs: very little extractable text
+                is_scanned = len(full_text.strip()) < 50
                 return full_text, is_scanned
-                
         except Exception as e:
             logger.error(f"PDF text extraction failed: {e}")
             return "", True
@@ -129,7 +123,6 @@ class TextProcessor:
         if not text:
             return None
             
-        # Clean the text
         clean_text = re.sub(r'[^\d,.\-+]', '', str(text).strip())
         if not clean_text:
             return None
@@ -137,24 +130,18 @@ class TextProcessor:
         try:
             # Handle European format (1.234,56) vs American (1,234.56)
             if ',' in clean_text and '.' in clean_text:
-                # Determine which is decimal separator by position
                 last_comma = clean_text.rfind(',')
                 last_dot = clean_text.rfind('.')
                 
                 if last_comma > last_dot:
-                    # European format: comma is decimal
                     clean_text = clean_text.replace('.', '').replace(',', '.')
                 else:
-                    # American format: dot is decimal
                     clean_text = clean_text.replace(',', '')
             elif ',' in clean_text:
-                # Only comma: check if it's decimal or thousands separator
                 parts = clean_text.split(',')
                 if len(parts) == 2 and len(parts[1]) <= 2:
-                    # Likely decimal separator
                     clean_text = clean_text.replace(',', '.')
                 else:
-                    # Thousands separator
                     clean_text = clean_text.replace(',', '')
             
             return float(clean_text)
@@ -186,21 +173,25 @@ class OfferParser:
         offer = ParsedOffer(filename=filename)
         
         try:
-            # Extract text
-            offer.raw_text, offer.is_scanned = self.text_processor.extract_text_from_pdf(pdf_bytes)
+            # First, try to extract data from tables, which are often more reliable
+            if HAS_CAMELOT:
+                try:
+                    tables = self._extract_tables_with_camelot(pdf_bytes)
+                    offer.parsed_tables = tables
+                    if tables:
+                        # Attempt to parse data from tables first
+                        self._parse_from_tables(offer)
+                except Exception as e:
+                    logger.warning(f"Camelot table extraction failed: {e}")
             
-            if offer.is_scanned:
-                offer.warnings.append("Document appears to be scanned - OCR may be needed for better accuracy")
-                offer.parsing_confidence = 0.1
-                return offer
-            
-            # Parse individual fields
-            self._parse_vendor(offer)
-            self._parse_vehicle_description(offer)
-            self._parse_financial_details(offer)
-            self._parse_contract_terms(offer)
-            self._parse_additional_costs(offer)
-            self._parse_dates_and_delivery(offer)
+            # Fallback to text parsing if no tables were found or parsing failed
+            if not offer.monthly_rental or not offer.duration_months or not offer.total_mileage:
+                offer.raw_text, offer.is_scanned = self.text_processor.extract_text_from_pdf(pdf_bytes)
+                if not offer.is_scanned:
+                    self._parse_from_text(offer)
+                else:
+                    offer.warnings.append("Document appears to be scanned - OCR may be needed for better accuracy")
+                    offer.parsing_confidence = 0.1
             
             # Calculate overall confidence
             offer.parsing_confidence = self._calculate_confidence(offer)
@@ -211,51 +202,71 @@ class OfferParser:
             offer.parsing_confidence = 0.0
         
         return offer
-    
-    def _parse_vendor(self, offer: ParsedOffer):
-        """Extract vendor/leasing company name"""
-        text = offer.raw_text
         
-        # Look for common patterns
+    def _extract_tables_with_camelot(self, pdf_bytes: bytes) -> List[pd.DataFrame]:
+        """Extract tables using Camelot."""
+        try:
+            tables = camelot.read_pdf(io.BytesIO(pdf_bytes), pages='all', flavor='stream')
+            return [table.df for table in tables]
+        except Exception as e:
+            logger.error(f"Camelot table extraction failed: {e}")
+            return []
+
+    def _parse_from_tables(self, offer: ParsedOffer):
+        """Attempt to parse offer data from extracted tables."""
+        full_text = " ".join([df.to_string() for df in offer.parsed_tables])
+        
+        # Use a simplified text parser on the table content
+        self._parse_from_text(offer, text_source=full_text)
+        
+    def _parse_from_text(self, offer: ParsedOffer, text_source: Optional[str] = None):
+        """Parse offer data from raw text using regex."""
+        text = text_source if text_source is not None else offer.raw_text
+        
+        self._parse_vendor(offer, text)
+        self._parse_vehicle_description(offer, text)
+        self._parse_financial_details(offer, text)
+        self._parse_contract_terms(offer, text)
+        self._parse_additional_costs(offer, text)
+        self._parse_dates_and_delivery(offer, text)
+
+    def _parse_vendor(self, offer: ParsedOffer, text: str):
+        """Extract vendor/leasing company name"""
         patterns = [
-            r'([A-Z][A-Za-z\s&]+(?:leasing|lease|finance|motor|automotive|rentals|fleet))',
-            r'from[\s:]+([A-Z][A-Za-z\s&]+)',
+            r'([A-Z][A-Za-z\s&]+(?:leasing|lease|finance|motor|automotive|rentals|fleet|ag))',
+            r'from[\s:]+\s*([A-Z][A-Za-z\s&]+)',
             r'([A-Z][A-Za-z\s&]+)\s+(?:offers|presents|quotes)',
         ]
         
         for pattern in patterns:
             match = re.search(pattern, text, re.IGNORECASE)
             if match:
-                offer.vendor = match.group(1).strip()[:50]  # Limit length
-                break
+                offer.vendor = match.group(1).strip()[:50]
+                return
         
-        # Fallback: use filename
+        # Fallback to filename
         if not offer.vendor:
             offer.vendor = re.sub(r'[._-]', ' ', offer.filename.replace('.pdf', '')).strip()
     
-    def _parse_vehicle_description(self, offer: ParsedOffer):
+    def _parse_vehicle_description(self, offer: ParsedOffer, text: str):
         """Extract vehicle description"""
-        text = offer.raw_text
-        
         patterns = [
-            r'(?:vehicle|model|car)[\s:]+([^\n\r]{5,100})',
-            r'(?:make/model)[\s:]+([^\n\r]{5,100})',
+            r'(?:vehicle|model|car)[:\s]+([^\n\r]{5,100})',
+            r'(?:make/model)[:\s]+([^\n\r]{5,100})',
+            r'Leasing\s+Offer\s+for\s+the\s+([^\n\r]+)',
         ]
         
         for pattern in patterns:
             match = re.search(pattern, text, re.IGNORECASE)
             if match:
                 offer.vehicle_description = match.group(1).strip()[:200]
-                break
+                return
     
-    def _parse_financial_details(self, offer: ParsedOffer):
+    def _parse_financial_details(self, offer: ParsedOffer, text: str):
         """Parse financial information"""
-        text = offer.raw_text
+        if not offer.currency:
+            offer.currency = self.text_processor.detect_currency(text)
         
-        # Currency detection
-        offer.currency = self.text_processor.detect_currency(text)
-        
-        # Monthly rental
         monthly_patterns = [
             r'monthly[\s\w]*?rental[\s:]*([€£$]?\s*[\d,.\s]+)',
             r'per\s+month[\s:]*([€£$]?\s*[\d,.\s]+)',
@@ -265,11 +276,11 @@ class OfferParser:
         for pattern in monthly_patterns:
             match = re.search(pattern, text, re.IGNORECASE)
             if match:
-                offer.monthly_rental = self.text_processor.normalize_number(match.group(1))
-                if offer.monthly_rental:
+                value = self.text_processor.normalize_number(match.group(1))
+                if value is not None:
+                    offer.monthly_rental = value
                     break
         
-        # Deposit
         deposit_patterns = [
             r'deposit[\s:]*([€£$]?\s*[\d,.\s]+)',
             r'down\s+payment[\s:]*([€£$]?\s*[\d,.\s]+)',
@@ -278,21 +289,20 @@ class OfferParser:
         for pattern in deposit_patterns:
             match = re.search(pattern, text, re.IGNORECASE)
             if match:
-                offer.deposit = self.text_processor.normalize_number(match.group(1))
-                if offer.deposit:
+                value = self.text_processor.normalize_number(match.group(1))
+                if value is not None:
+                    offer.deposit = value
                     break
         
-        # Admin fees
         admin_pattern = r'admin(?:istration)?\s+fee[\s:]*([€£$]?\s*[\d,.\s]+)'
         match = re.search(admin_pattern, text, re.IGNORECASE)
         if match:
-            offer.admin_fees = self.text_processor.normalize_number(match.group(1))
+            value = self.text_processor.normalize_number(match.group(1))
+            if value is not None:
+                offer.admin_fees = value
     
-    def _parse_contract_terms(self, offer: ParsedOffer):
+    def _parse_contract_terms(self, offer: ParsedOffer, text: str):
         """Parse contract duration and mileage"""
-        text = offer.raw_text
-        
-        # Contract duration
         duration_patterns = [
             r'(\d+)\s*(?:months?|mths?)',
             r'(\d+(?:\.\d+)?)\s*(?:years?|yrs?)(?:\s*[=*]\s*(\d+)\s*months?)?',
@@ -301,14 +311,10 @@ class OfferParser:
         for pattern in duration_patterns:
             match = re.search(pattern, text, re.IGNORECASE)
             if match:
-                if 'year' in pattern:
-                    years = float(match.group(1))
-                    offer.duration_months = int(years * 12)
-                else:
-                    offer.duration_months = int(match.group(1))
+                years = float(match.group(1))
+                offer.duration_months = int(years * 12)
                 break
         
-        # Total mileage
         mileage_patterns = [
             r'(\d{1,3}(?:[,.\s]\d{3})*)\s*(?:km|miles?)',
             r'(\d+(?:,\d{3})*)\s*(?:km|miles?)\s*(?:total|per\s+contract)',
@@ -317,37 +323,27 @@ class OfferParser:
         for pattern in mileage_patterns:
             match = re.search(pattern, text, re.IGNORECASE)
             if match:
-                offer.total_mileage = int(self.text_processor.normalize_number(match.group(1)) or 0)
-                if offer.total_mileage:
+                value = self.text_processor.normalize_number(match.group(1))
+                if value is not None:
+                    offer.total_mileage = int(value)
                     break
     
-    def _parse_additional_costs(self, offer: ParsedOffer):
+    def _parse_additional_costs(self, offer: ParsedOffer, text: str):
         """Parse maintenance, insurance, etc."""
-        text = offer.raw_text.lower()
+        text_lower = text.lower()
         
-        # Maintenance
-        if re.search(r'maintenance\s+included', text):
-            offer.maintenance_included = True
-        
-        maintenance_match = re.search(r'maintenance[\s:]*([€£$]?\s*[\d,.\s]+)', text)
-        if maintenance_match:
-            offer.maintenance_cost = self.text_processor.normalize_number(maintenance_match.group(1))
-        
-        # Similar patterns for tyres, insurance, road tax
-        for service in ['tyres', 'insurance', 'road tax']:
-            if re.search(rf'{service}\s+included', text):
-                setattr(offer, f'{service.replace(" ", "_")}_included', True)
+        for service in ['maintenance', 'tyres', 'insurance', 'road tax']:
+            is_included = re.search(rf'{service}\s+included', text_lower)
+            setattr(offer, f'{service.replace(" ", "_")}_included', bool(is_included))
             
-            cost_match = re.search(rf'{service}[\s:]*([€£$]?\s*[\d,.\s]+)', text)
+            cost_match = re.search(rf'{service}[\s:]*([€£$]?\s*[\d,.\s]+)', text_lower)
             if cost_match:
-                setattr(offer, f'{service.replace(" ", "_")}_cost', 
-                       self.text_processor.normalize_number(cost_match.group(1)))
+                value = self.text_processor.normalize_number(cost_match.group(1))
+                if value is not None:
+                    setattr(offer, f'{service.replace(" ", "_")}_cost', value)
     
-    def _parse_dates_and_delivery(self, offer: ParsedOffer):
+    def _parse_dates_and_delivery(self, offer: ParsedOffer, text: str):
         """Parse validity dates and delivery times"""
-        text = offer.raw_text
-        
-        # Offer validity
         validity_match = re.search(r'valid\s+until[\s:]*([^\n\r]{5,50})', text, re.IGNORECASE)
         if validity_match:
             try:
@@ -357,33 +353,25 @@ class OfferParser:
             except:
                 offer.offer_valid_until = validity_match.group(1).strip()
         
-        # Delivery time
         delivery_match = re.search(r'(?:delivery|lead\s+time)[\s:]*(\d+\s*(?:weeks?|months?|days?))', text, re.IGNORECASE)
         if delivery_match:
             offer.delivery_time = delivery_match.group(1)
     
     def _calculate_confidence(self, offer: ParsedOffer) -> float:
-        """Calculate parsing confidence score"""
+        """Calculate parsing confidence score based on extracted fields"""
         score = 0.0
         
-        # Essential fields
-        if offer.monthly_rental:
-            score += 0.3
-        if offer.duration_months:
-            score += 0.2
-        if offer.total_mileage:
-            score += 0.2
-        if offer.vendor:
-            score += 0.1
+        essential_fields = ['monthly_rental', 'duration_months', 'total_mileage', 'vendor']
+        for field in essential_fields:
+            if getattr(offer, field) is not None:
+                score += 0.25
+        
         if offer.currency:
             score += 0.1
-        
-        # Additional fields
         if offer.deposit is not None:
-            score += 0.05
-        if offer.admin_fees is not None:
-            score += 0.05
+            score += 0.1
         
+        # Cap the score at 1.0
         return min(1.0, score)
 
 class OfferComparator:
@@ -401,21 +389,19 @@ class OfferComparator:
             errors.append("Need at least 2 offers for comparison")
             return False, errors
         
-        # Check for essential data
         durations = [o.duration_months for o in self.offers if o.duration_months]
         mileages = [o.total_mileage for o in self.offers if o.total_mileage]
         
         if len(durations) != len(self.offers):
-            errors.append("Some offers missing contract duration")
+            errors.append("Some offers are missing contract duration.")
         elif len(set(durations)) > 1:
             errors.append(f"Contract durations don't match: {set(durations)}")
         
         if len(mileages) != len(self.offers):
-            errors.append("Some offers missing mileage information")
+            errors.append("Some offers are missing mileage information.")
         elif len(set(mileages)) > 1:
             errors.append(f"Contract mileages don't match: {set(mileages)}")
         
-        # Currency check
         currencies = [o.currency for o in self.offers if o.currency]
         if len(set(currencies)) > 1:
             errors.append(f"Mixed currencies detected: {set(currencies)}")
@@ -434,25 +420,21 @@ class OfferComparator:
                 })
                 continue
             
-            # Base costs
             monthly_total = offer.monthly_rental * offer.duration_months
             upfront_total = (offer.deposit or 0) + (offer.delivery_fees or 0) + (offer.admin_fees or 0)
             
-            # Optional costs based on configuration
             additional_costs = 0
             if self.config.get('include_maintenance') and offer.maintenance_cost:
-                additional_costs += offer.maintenance_cost
+                additional_costs += (offer.maintenance_cost or 0)
             if self.config.get('include_tyres') and offer.tyres_cost:
-                additional_costs += offer.tyres_cost
+                additional_costs += (offer.tyres_cost or 0)
             if self.config.get('include_insurance') and offer.insurance_cost:
-                additional_costs += offer.insurance_cost
+                additional_costs += (offer.insurance_cost or 0)
             if self.config.get('include_road_tax') and offer.road_tax_cost:
-                additional_costs += offer.road_tax_cost
+                additional_costs += (offer.road_tax_cost or 0)
             
-            # Discounts
             discount = offer.discount_amount or 0
             
-            # Total contract cost
             total_cost = monthly_total + upfront_total + additional_costs - discount
             
             results.append({
@@ -478,15 +460,13 @@ class OfferComparator:
     def generate_comparison_report(self) -> pd.DataFrame:
         """Generate detailed comparison DataFrame"""
         cost_data = self.calculate_total_costs()
-        
         df = pd.DataFrame(cost_data)
         if not df.empty:
-            df['rank'] = range(1, len(df) + 1)
-        
+            df['rank'] = df['total_contract_cost'].rank(method='min').astype(int)
         return df
 
-# Streamlit UI
 def main():
+    """Main function to run the Streamlit app"""
     st.set_page_config(
         page_title="Fleet Leasing Offer Comparator",
         page_icon="🚗",
@@ -525,70 +505,108 @@ def main():
         help="Upload PDF files containing leasing offers for the same vehicle"
     )
     
-    # Demo data option
-    if st.checkbox("🎯 Load Demo Data", help="Load sample data for testing"):
+    if st.button("🎯 Load Demo Data", help="Load sample data for testing"):
         uploaded_files = create_demo_data()
-    
+        
     if uploaded_files and len(uploaded_files) >= 2:
         process_offers(uploaded_files, config)
-    elif uploaded_files:
+    elif uploaded_files and len(uploaded_files) < 2:
         st.warning("⚠️ Please upload at least 2 PDF files for comparison")
 
 def create_demo_data():
-    """Create demo data for testing"""
-    # This would create sample ParsedOffer objects
-    # Implementation would depend on your specific demo needs
-    return []
+    """Create dummy files for demonstration purposes."""
+    st.info("Loading demo data...")
+    demo_offers = [
+        ("Demo Offer A.pdf", """
+        Fleet Lease GmbH
+        Monthly Rental: € 500.00
+        Duration: 36 months
+        Total Mileage: 45,000 km
+        Admin Fee: € 100.00
+        Deposit: € 1500.00
+        Maintenance: Included
+        Tyres: € 20.00
+        Road Tax: Included
+        Valid until: 31-12-2023
+        """),
+        ("Demo Offer B.pdf", """
+        Leasing Solutions S.A.
+        Monthly Rental: 520,00 EUR
+        Duration: 3 Years
+        Total Mileage: 45,000 km
+        Admin Fee: 120,00 EUR
+        Insurance: Included
+        Road Tax: 10,00 EUR
+        """),
+        ("Demo Offer C.pdf", """
+        Quick Rent Corp.
+        Monthly Rental: $490.00
+        Contract: 36 months
+        Mileage Limit: 45,000 miles
+        Upfront: $1000.00
+        Maintenance: Included
+        Road Tax: Included
+        """)
+    ]
+    
+    uploaded_files = []
+    for filename, content in demo_offers:
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            tmp.write(content.encode('utf-8'))
+            tmp_path = tmp.name
+        
+        # Mimic Streamlit's file object
+        uploaded_file = st.runtime.uploaded_file_manager.UploadedFile(
+            name=filename,
+            type="application/pdf",
+            path=tmp_path,
+            size=len(content.encode('utf-8'))
+        )
+        uploaded_files.append(uploaded_file)
+        
+    st.success("Demo data loaded! Please click the 'Compare Offers' button to proceed.")
+    return uploaded_files
 
 def process_offers(uploaded_files, config):
     """Process uploaded offers and generate comparison"""
     parser = OfferParser()
     offers = []
     
-    # Progress tracking
     progress_bar = st.progress(0)
     status_text = st.empty()
     
-    # Parse each file
     for i, uploaded_file in enumerate(uploaded_files):
         status_text.text(f"Processing {uploaded_file.name}...")
-        
         try:
             pdf_bytes = uploaded_file.read()
             offer = parser.parse_pdf(pdf_bytes, uploaded_file.name)
             offers.append(offer)
-            
         except Exception as e:
             st.error(f"❌ Error processing {uploaded_file.name}: {str(e)}")
             logger.error(f"File processing error: {e}\n{traceback.format_exc()}")
-        
         progress_bar.progress((i + 1) / len(uploaded_files))
     
     status_text.text("Processing complete!")
     progress_bar.empty()
     
-    if not offers:
-        st.error("❌ No offers could be processed successfully")
+    if not offers or not any(o.parsing_confidence > 0 for o in offers):
+        st.error("❌ No offers could be processed successfully. Please check the file format.")
         return
     
-    # Display parsing results
     display_parsing_results(offers)
     
-    # Validate and compare
     comparator = OfferComparator(offers, config)
     is_valid, errors = comparator.validate_offers()
     
     if not is_valid:
-        st.error("❌ Validation Errors:")
+        st.error("❌ Validation Errors: Offers cannot be compared due to inconsistencies.")
         for error in errors:
             st.error(f"• {error}")
         return
     
-    # Generate comparison
     comparison_df = comparator.generate_comparison_report()
     display_comparison_results(comparison_df, config)
     
-    # Export functionality
     provide_export_options(comparison_df, offers, config)
 
 def display_parsing_results(offers: List[ParsedOffer]):
@@ -596,41 +614,35 @@ def display_parsing_results(offers: List[ParsedOffer]):
     st.header("📊 Parsing Results")
     
     col1, col2, col3 = st.columns(3)
-    
     with col1:
         avg_confidence = np.mean([o.parsing_confidence for o in offers])
         st.metric("Average Confidence", f"{avg_confidence:.1%}")
-    
     with col2:
         scanned_count = sum(1 for o in offers if o.is_scanned)
         st.metric("Scanned PDFs", scanned_count)
-    
     with col3:
         warning_count = sum(len(o.warnings) for o in offers)
         st.metric("Total Warnings", warning_count)
     
-    # Detailed results
     with st.expander("📋 Detailed Parsing Results"):
         for offer in offers:
             st.write(f"**{offer.vendor or offer.filename}**")
             st.write(f"Confidence: {offer.parsing_confidence:.1%}")
             if offer.warnings:
-                st.write("⚠️ Warnings:", ", ".join(offer.warnings))
-            st.write("---")
+                st.warning("⚠️ Warnings: " + ", ".join(offer.warnings))
+            st.json(offer.__dict__)
 
 def display_comparison_results(df: pd.DataFrame, config: Dict[str, Any]):
     """Display comparison results"""
     st.header("🏆 Comparison Results")
     
     if df.empty:
-        st.error("No valid offers to compare")
+        st.error("No valid offers to compare.")
         return
     
-    # Winner announcement
-    winner = df.iloc[0]
+    winner = df.loc[df['rank'] == 1].iloc[0]
     st.success(f"🥇 **Winner: {winner['vendor']}** - Total Cost: {winner['total_contract_cost']:,.2f} {winner.get('currency', '')}")
     
-    # Comparison table
     st.subheader("📈 Detailed Comparison")
     
     display_columns = [
@@ -649,13 +661,11 @@ def display_comparison_results(df: pd.DataFrame, config: Dict[str, Any]):
             'total_contract_cost': '{:,.2f}',
             'cost_per_km': '{:.4f}',
             'parsing_confidence': '{:.1%}'
-        }).highlight_min(['total_contract_cost'], color='lightgreen'),
+        }).highlight_min(['total_contract_cost'], color='#d4edda'),
         use_container_width=True
     )
     
-    # Cost breakdown chart
     st.subheader("💰 Cost Breakdown")
-    
     chart_data = df[['vendor', 'monthly_total', 'upfront_total', 'additional_costs']].set_index('vendor')
     st.bar_chart(chart_data)
 
@@ -673,41 +683,86 @@ def provide_export_options(df: pd.DataFrame, offers: List[ParsedOffer], config: 
                 file_name=f"leasing_comparison_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
-            
             st.success("✅ Excel report generated successfully!")
-            
         except Exception as e:
             st.error(f"❌ Error generating Excel report: {str(e)}")
             logger.error(f"Excel generation error: {e}")
 
 def generate_excel_report(df: pd.DataFrame, offers: List[ParsedOffer], config: Dict[str, Any]) -> io.BytesIO:
-    """Generate Excel report with multiple sheets"""
+    """Generate Excel report with multiple sheets and detailed breakdowns"""
     buffer = io.BytesIO()
     
     with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-        # Winner Analysis sheet
+        # Sheet 1: Winner Analysis
         df.to_excel(writer, sheet_name='Winner Analysis', index=False)
+        worksheet1 = writer.sheets['Winner Analysis']
         
-        # Individual offer sheets
+        # Add a title and description
+        worksheet1.write(0, 0, 'Winner Analysis')
+        worksheet1.write(1, 0, 'This sheet provides a summary and ranking of all offers based on total cost.')
+        
+        # Sheet 2 onwards: Individual offer sheets
         for offer in offers:
-            sheet_name = (offer.vendor or offer.filename)[:31]  # Excel sheet name limit
+            sheet_name = (offer.vendor or "Offer").replace("/", "_")[:31]
             
-            offer_data = {
-                'Field': [
-                    'Vendor', 'Vehicle', 'Duration (months)', 'Total Mileage',
-                    'Monthly Rental', 'Deposit', 'Admin Fees', 'Maintenance Cost',
-                    'Currency', 'Parsing Confidence', 'Warnings'
+            # Prepare a detailed summary table
+            summary_data = {
+                'Key': [
+                    'Vendor', 'Vehicle Description', 'Contract Duration (months)', 
+                    'Total Mileage', 'Monthly Rental', 'Upfront Costs', 
+                    'Deposit', 'Admin Fees', 'Delivery Fees', 'Excess Mileage Rate',
+                    'Discount Amount', 'Currency', 'Offer Valid Until', 
+                    'Delivery Time', 'Parsing Confidence'
                 ],
                 'Value': [
                     offer.vendor, offer.vehicle_description, offer.duration_months,
-                    offer.total_mileage, offer.monthly_rental, offer.deposit,
-                    offer.admin_fees, offer.maintenance_cost, offer.currency,
-                    f"{offer.parsing_confidence:.1%}", "; ".join(offer.warnings)
+                    offer.total_mileage, offer.monthly_rental, offer.upfront_costs,
+                    offer.deposit, offer.admin_fees, offer.delivery_fees,
+                    offer.excess_mileage_rate, offer.discount_amount, offer.currency,
+                    offer.offer_valid_until, offer.delivery_time,
+                    f"{offer.parsing_confidence:.1%}"
                 ]
             }
+            summary_df = pd.DataFrame(summary_data)
+            summary_df.to_excel(writer, sheet_name=sheet_name, index=False)
             
-            offer_df = pd.DataFrame(offer_data)
-            offer_df.to_excel(writer, sheet_name=sheet_name, index=False)
+            # Get the workbook and worksheet objects
+            workbook = writer.book
+            worksheet = writer.sheets[sheet_name]
+            
+            # Add a title
+            worksheet.write(0, 0, f"Summary of {offer.vendor or 'Offer'}")
+            
+            # Add a breakdown of included/excluded services
+            row_idx = len(summary_df) + 3
+            worksheet.write(row_idx, 0, 'Included Services')
+            
+            included_services = [
+                'Maintenance' if offer.maintenance_included else None,
+                'Tyres' if offer.tyres_included else None,
+                'Insurance' if offer.insurance_included else None,
+                'Road Tax' if offer.road_tax_included else None,
+            ]
+            included_str = ", ".join([s for s in included_services if s]) or "None specified"
+            worksheet.write(row_idx, 1, included_str)
+            
+            row_idx += 2
+            worksheet.write(row_idx, 0, 'Parsing Warnings')
+            warnings_str = ", ".join(offer.warnings) or "None"
+            worksheet.write(row_idx, 1, warnings_str)
+            
+            # Add raw data and parsed tables for debugging
+            row_idx += 2
+            worksheet.write(row_idx, 0, 'Raw Text Data')
+            worksheet.write(row_idx + 1, 0, offer.raw_text)
+            
+            if offer.parsed_tables:
+                row_idx += len(offer.raw_text.split('\n')) + 2
+                worksheet.write(row_idx, 0, 'Parsed Tables')
+                for i, table_df in enumerate(offer.parsed_tables):
+                    row_idx += 2
+                    table_df.to_excel(writer, sheet_name=sheet_name, startrow=row_idx, startcol=0, index=False)
+                    row_idx += len(table_df)
     
     buffer.seek(0)
     return buffer
