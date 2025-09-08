@@ -1158,8 +1158,19 @@ if offers_normalized:
     st.markdown("### Highlights")
     best_tcc = comp_df["TCC"].min()
     worst_tcc = comp_df["TCC"].max()
-    best_vendor = comp_df.loc[comp_df["TCC"].idxmin(), "Vendor"]
-    st.write(f"Winner by default (lowest TCC): **{best_vendor}** — TCC: **{best_tcc:,.2f} {list(analysis['currency_set'])[0] if analysis['currency_set'] else ''}**")
+    if comp_df.empty or comp_df["TCC"].isna().all():
+        st.error("No valid offers parsed — cannot compute winner. Please check uploads or demo data.")
+    else:
+        best_tcc = comp_df["TCC"].min()
+        worst_tcc = comp_df["TCC"].max()
+        best_vendor = comp_df.loc[comp_df["TCC"].idxmin(), "Vendor"]
+
+    st.markdown("### Highlights")
+    st.write(f"Winner by default (lowest TCC): **{best_vendor}** — TCC {best_tcc:,.2f}")
+    
+    st.write("Top factors why winner (human-readable):")
+    for note in analysis.get("why_notes", []):
+        st.write(f"- {note}")    st.write(f"Winner by default (lowest TCC): **{best_vendor}** — TCC: **{best_tcc:,.2f} {list(analysis['currency_set'])[0] if analysis['currency_set'] else ''}**")
     st.write("Top factors why winner (human-readable):")
     for note in analysis.get("why_notes", []):
         st.write("-", note)
