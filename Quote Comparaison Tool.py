@@ -1245,7 +1245,8 @@ else:
 
     # Excel export
 st.markdown("### Export results")
-if len(offers_normalized) >= 2:
+
+if len(offers_normalized) >= 2 and "comp_df" in locals():
     try:
         excel_bytes = build_excel(comp_df, offers_normalized, assumptions)
         st.download_button(
