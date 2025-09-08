@@ -1155,25 +1155,30 @@ if offers_normalized:
     }), height=300)
 
     # Highlight differences: conditional formatting in UI is limited; show best/worst colors manually
-    st.markdown("### Highlights")
+st.markdown("### Highlights")
+
+if not comp_df.empty and "TCC" in comp_df.columns:
     best_tcc = comp_df["TCC"].min()
     worst_tcc = comp_df["TCC"].max()
-    if comp_df.empty or comp_df["TCC"].isna().all():
-        st.error("No valid offers parsed — cannot compute winner. Please check uploads or demo data.")
-    else:
-        best_tcc = comp_df["TCC"].min()
-        worst_tcc = comp_df["TCC"].max()
+
+    # Safely get winner if possible
+    if pd.notna(best_tcc) and "Vendor" in comp_df.columns:
         best_vendor = comp_df.loc[comp_df["TCC"].idxmin(), "Vendor"]
 
-    st.markdown("### Highlights")
-    st.write(f"Winner by default (lowest TCC): **{best_vendor}** — TCC {best_tcc:,.2f}")
-    
-    st.write("Top factors why winner (human-readable):")
-    for note in analysis.get("why_notes", []):
-        st.write(f"- {note}")    st.write(f"Winner by default (lowest TCC): **{best_vendor}** — TCC: **{best_tcc:,.2f} {list(analysis['currency_set'])[0] if analysis['currency_set'] else ''}**")
-    st.write("Top factors why winner (human-readable):")
-    for note in analysis.get("why_notes", []):
-        st.write("-", note)
+        # Winner message
+        st.write(
+            f"Winner by default (lowest TCC): **{best_vendor}** — "
+            f"TCC: **{best_tcc:,.2f} "
+            f"{list(analysis['currency_set'])[0] if analysis.get('currency_set') else ''}**"
+        )
+
+    # Human-readable notes about why
+    if analysis.get("why_notes"):
+        st.write("Top factors why winner (human-readable):")
+        for note in analysis["why_notes"]:
+            st.write(f"- {note}")
+else:
+    st.warning("No valid comparison data available for highlights.")
     # Sensitivity: show what happens if include/exclude maintenance
     st.markdown("### Sensitivity: Maintenance inclusion")
     # toggle simulated
