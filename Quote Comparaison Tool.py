@@ -465,6 +465,8 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
         upfront_costs = (offer.upfront_costs or 0) + (offer.deposit or 0) + (offer.admin_fees or 0)
         offer_dict['total_contract_cost'] = (offer.monthly_rental * offer.duration_months) + upfront_costs if offer.monthly_rental and offer.duration_months else None
         offer_data_list.append(offer_dict)
+    
+    offers_df = pd.DataFrame(offer_data_list)
 
     # Get the list of vendors to use as column headers
     vendors = [offer.get('vendor', 'Unknown Vendor') for offer in offer_data_list]
