@@ -423,7 +423,7 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
     for offer in offers:
         offer_dict = asdict(offer)
         offer_dict['total_contract_cost'] = (offer.monthly_rental * offer.duration_months) + (offer.upfront_costs or 0) + (offer.deposit or 0) + (offer.admin_fees or 0)
-        offer_data.concat(offer_dict)
+        offer_data_for_df.append(offer_dict) # Corrected line: Use append and the correct variable name
     
     offers_df = pd.DataFrame(offer_data_for_df)
     
@@ -465,9 +465,8 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
         base_desc = offers_df.loc[0, 'vehicle_description'] or ""
         
         # Add the 'Correspondence (%)' row dynamically
-        new_row_idx = report_df.index.max() + 1
-        report_df.loc[new_row_idx, 'Field'] = 'Vehicle description correspondence'
-        report_df.loc[new_row_idx, 'Value'] = '100.0%'
+        new_row = pd.Series(['Vehicle description correspondence', '100.0%'] + [''] * (len(report_df.columns) - 2), index=report_df.columns)
+        report_df = pd.concat([report_df, new_row.to_frame().T], ignore_index=True)
         
         for idx, offer in offers_df.iterrows():
             if idx > 0:
@@ -476,22 +475,20 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
                 # Find the correct column for the vendor
                 vendor_col = offer.get('vendor', "Unknown Vendor")
                 if vendor_col in report_df.columns:
-                    report_df.loc[new_row_idx, vendor_col] = f"{similarity:.1f}%"
+                    # Update the newly added row
+                    report_df.loc[report_df.index[-1], vendor_col] = f"{similarity:.1f}%"
 
     # Add Cost Analysis Summary at the bottom
     cost_data = OfferComparator(offers, {}).calculate_total_costs()
     sorted_offers = pd.DataFrame(cost_data).sort_values('total_contract_cost')
     
-    report_df = report_pd.concat(pd.Series(), ignore_index=True)
-    report_df = report_pd.concat(pd.Series(['Cost Analysis', None, None, None, None, None], index=report_df.columns), ignore_index=True)
-    report_df = report_pd.concat(pd.Series(['Vendor', 'Total Cost', 'Monthly Cost', 'Winner'], index=report_df.columns), ignore_index=True)
-
+    # Corrected method to append rows
+    report_df.loc[len(report_df)] = ['Cost Analysis'] + [''] * (len(report_df.columns) - 1)
+    report_df.loc[len(report_df)] = ['Vendor', 'Total Cost', 'Monthly Cost', 'Winner'] + [''] * (len(report_df.columns) - 4)
+    
     for index, row in sorted_offers.iterrows():
         is_winner = "🥇 Winner" if index == 0 else ""
-        report_df = report_pd.concat(
-            pd.Series([row['vendor'], f"{row['total_contract_cost']:,.2f}", f"{row['cost_per_month']:,.2f}", is_winner], index=report_df.columns),
-            ignore_index=True
-        )
+        report_df.loc[len(report_df)] = [row['vendor'], f"{row['total_contract_cost']:,.2f}", f"{row['cost_per_month']:,.2f}", is_winner] + [''] * (len(report_df.columns) - 4)
 
     # Use a BytesIO buffer to save the Excel file in memory
     buffer = io.BytesIO()
