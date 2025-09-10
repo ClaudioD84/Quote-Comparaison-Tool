@@ -133,13 +133,13 @@ class LLMParser:
         # Mocking the LLM's response for demonstration
         # This mock data is based on the two PDFs from the user's query
         mock_responses = {
-            "quotation_6351624001_Georges__Jean-Francois_1.pdf": {
+            "Kontraktoplæg_3052514001_1 (1).pdf": {
                 "customer": "Philips",
-                "driver_name": "Georges Jean-Francois",
+                "driver_name": "Lars Østergaard",
                 "vendor": "Ayvens",
-                "vehicle_description": "SKODA ELROQ BEV 82KWH 85 CORPORATE",
-                "duration_months": 60,
-                "total_mileage": 175000,
+                "vehicle_description": "OPEL GRANDLAND EL 210",
+                "duration_months": 48,
+                "total_mileage": 140000,
                 "monthly_rental": 5871.39,
                 "upfront_costs": 0,
                 "deposit": 0,
@@ -150,13 +150,13 @@ class LLMParser:
                 "parsing_confidence": 0.95,
                 "warnings": ["Total mileage calculated from annual mileage"]
             },
-            "quotation_6351624001_Georges__Jean-Francois.pdf": {
-                "customer": "Philips",
-                "driver_name": "Georges Jean-Francois",
+            "quotation  2508.120.036 (1).pdf": {
+                "customer": "Grundfos",
+                "driver_name": "Lars Østergaard",
                 "vendor": "ARVAL",
-                "vehicle_description": "SKODA ELROQ BEV 82KWH 85 CORPORATE",
-                "duration_months": 60,
-                "total_mileage": 175000,
+                "vehicle_description": "Opel Grandland EL 210 73kWh F GS Sky 5d",
+                "duration_months": 48,
+                "total_mileage": 140000,
                 "monthly_rental": 5576.79,
                 "upfront_costs": 9900,
                 "deposit": None,
