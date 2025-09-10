@@ -45,6 +45,22 @@ def setup_logging():
 
 logger = setup_logging()
 
+# Currency mapping dictionary for European currencies
+CURRENCY_MAP = {
+    'kr.': 'DKK',
+    'dkk': 'DKK',
+    '€': 'EUR',
+    'eur': 'EUR',
+    '£': 'GBP',
+    'gbp': 'GBP',
+    'chf': 'CHF',
+    'sek': 'SEK',
+    'nok': 'NOK',
+    'pln': 'PLN',
+    'huf': 'HUF',
+    'czk': 'CZK',
+}
+
 @dataclass
 class ParsedOffer:
     """Standardized structure for parsed leasing offer data"""
@@ -64,6 +80,12 @@ class ParsedOffer:
     currency: Optional[str] = None
     parsing_confidence: float = 0.0
     warnings: List[str] = field(default_factory=list)
+
+def normalize_currency(currency_str: Optional[str]) -> Optional[str]:
+    """Normalize currency string to a standard code."""
+    if not currency_str:
+        return None
+    return CURRENCY_MAP.get(currency_str.lower(), currency_str)
 
 class TextProcessor:
     """Handles text extraction and normalization"""
@@ -191,6 +213,11 @@ class OfferComparator:
         if len(self.offers) < 2:
             errors.append("Need at least 2 offers for comparison")
             return False, errors
+            
+        normalized_currencies = [normalize_currency(o.currency) for o in self.offers if o.currency]
+        if len(set(normalized_currencies)) > 1:
+            errors.append(f"Mixed currencies detected: {set(normalized_currencies)}")
+
         durations = [o.duration_months for o in self.offers if o.duration_months]
         mileages = [o.total_mileage for o in self.offers if o.total_mileage]
         if len(durations) != len(self.offers) or None in durations:
@@ -201,9 +228,7 @@ class OfferComparator:
             errors.append("Some offers are missing mileage information.")
         elif len(set(mileages)) > 1:
             errors.append(f"Contract mileages don't match: {set(mileages)}")
-        currencies = [o.currency for o in self.offers if o.currency]
-        if len(set(currencies)) > 1:
-            errors.append(f"Mixed currencies detected: {set(currencies)}")
+        
         return len(errors) == 0, errors
     
     def calculate_total_costs(self) -> List[Dict[str, Any]]:
