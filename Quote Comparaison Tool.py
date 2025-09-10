@@ -77,11 +77,39 @@ class ParsedOffer:
     admin_fees: Optional[float] = None
     maintenance_included: Optional[bool] = None
     excess_mileage_rate: Optional[float] = None
+    unused_mileage_rate: Optional[float] = None
     currency: Optional[str] = None
     parsing_confidence: float = 0.0
     warnings: List[str] = field(default_factory=list)
     quote_number: Optional[str] = None
-
+    
+    # New fields
+    manufacturer: Optional[str] = None
+    model: Optional[str] = None
+    version: Optional[str] = None
+    jato_code: Optional[str] = None
+    fuel_type: Optional[str] = None
+    num_doors: Optional[int] = None
+    hp: Optional[int] = None
+    c02_emission: Optional[float] = None
+    battery_range: Optional[float] = None
+    vehicle_price: Optional[float] = None
+    options_price: Optional[float] = None
+    accessories_price: Optional[float] = None
+    delivery_cost: Optional[float] = None
+    registration_tax: Optional[float] = None
+    total_net_investment: Optional[float] = None
+    taxation_value: Optional[float] = None
+    financial_rate: Optional[float] = None
+    depreciation_interest: Optional[float] = None
+    maintenance_repair: Optional[float] = None
+    insurance_cost: Optional[float] = None
+    green_tax: Optional[float] = None
+    management_fee: Optional[float] = None
+    tyres_cost: Optional[float] = None
+    roadside_assistance: Optional[float] = None
+    total_monthly_lease: Optional[float] = None
+    
 def normalize_currency(currency_str: Optional[str]) -> Optional[str]:
     """Normalize currency string to a standard code."""
     if not currency_str:
@@ -145,35 +173,85 @@ class LLMParser:
                         "admin_fees": {"type": "NUMBER"},
                         "maintenance_included": {"type": "BOOLEAN"},
                         "excess_mileage_rate": {"type": "NUMBER"},
+                        "unused_mileage_rate": {"type": "NUMBER"},
                         "currency": {"type": "STRING"},
                         "parsing_confidence": {"type": "NUMBER"},
                         "warnings": {"type": "ARRAY", "items": {"type": "STRING"}},
-                        "quote_number": {"type": "STRING"}
+                        "quote_number": {"type": "STRING"},
+                        "manufacturer": {"type": "STRING"},
+                        "model": {"type": "STRING"},
+                        "version": {"type": "STRING"},
+                        "jato_code": {"type": "STRING"},
+                        "fuel_type": {"type": "STRING"},
+                        "num_doors": {"type": "NUMBER"},
+                        "hp": {"type": "NUMBER"},
+                        "c02_emission": {"type": "NUMBER"},
+                        "battery_range": {"type": "NUMBER"},
+                        "vehicle_price": {"type": "NUMBER"},
+                        "options_price": {"type": "NUMBER"},
+                        "accessories_price": {"type": "NUMBER"},
+                        "delivery_cost": {"type": "NUMBER"},
+                        "registration_tax": {"type": "NUMBER"},
+                        "total_net_investment": {"type": "NUMBER"},
+                        "taxation_value": {"type": "NUMBER"},
+                        "financial_rate": {"type": "NUMBER"},
+                        "depreciation_interest": {"type": "NUMBER"},
+                        "maintenance_repair": {"type": "NUMBER"},
+                        "insurance_cost": {"type": "NUMBER"},
+                        "green_tax": {"type": "NUMBER"},
+                        "management_fee": {"type": "NUMBER"},
+                        "tyres_cost": {"type": "NUMBER"},
+                        "roadside_assistance": {"type": "NUMBER"},
+                        "total_monthly_lease": {"type": "NUMBER"}
                     }
                 }
             }
         }
         
         # Mocking the LLM's response for demonstration
-        # This mock data is based on the two PDFs from the user's query
         mock_responses = {
             "Kontraktoplæg_3052514001_1 (1).pdf": {
                 "customer": "Grundfos A/S",
                 "driver_name": None,
                 "vendor": "Ayvens",
-                "vehicle_description": "OPEL GRANDLAND EL 210",
+                "vehicle_description": "OPEL GRANDLAND EL 210 73kWh F GS Sky",
                 "duration_months": 48,
                 "total_mileage": 140000,
-                "monthly_rental": 6071.35,
+                "monthly_rental": 5871.39,
                 "upfront_costs": 0,
                 "deposit": 0,
-                "admin_fees": 0,
+                "admin_fees": None,
                 "maintenance_included": True,
-                "excess_mileage_rate": 0.90,
+                "excess_mileage_rate": 0.50,
                 "currency": "kr.",
                 "parsing_confidence": 0.95,
                 "warnings": ["Total mileage calculated from annual mileage"],
-                "quote_number": "3052514/001"
+                "quote_number": "3052514/001",
+                "manufacturer": "Opel",
+                "model": "Grandland",
+                "version": "EL 210 73kWh F GS Sky",
+                "jato_code": None,
+                "fuel_type": "BEV",
+                "num_doors": None,
+                "hp": None,
+                "c02_emission": 0.00,
+                "battery_range": 582.00,
+                "vehicle_price": 286008.00,
+                "options_price": 25600.00,
+                "accessories_price": 6200.00,
+                "delivery_cost": 3820.00,
+                "registration_tax": 0.00,
+                "total_net_investment": 303028.00,
+                "taxation_value": 361990.00,
+                "financial_rate": None,
+                "depreciation_interest": 4583.57,
+                "maintenance_repair": 752.89,
+                "insurance_cost": 364.59,
+                "green_tax": 70.00,
+                "management_fee": 25.00,
+                "tyres_cost": 687.43,
+                "roadside_assistance": 19.46,
+                "total_monthly_lease": 5871.39
             },
             "quotation  2508.120.036 (1).pdf": {
                 "customer": "Grundfos EV",
@@ -188,10 +266,80 @@ class LLMParser:
                 "admin_fees": 65,
                 "maintenance_included": True,
                 "excess_mileage_rate": 0.7202,
+                "unused_mileage_rate": -0.7202,
                 "currency": "DKK",
                 "parsing_confidence": 0.98,
                 "warnings": ["Total mileage and duration parsed from combined string"],
-                "quote_number": "2508.120.036"
+                "quote_number": "2508.120.036",
+                "manufacturer": "Opel",
+                "model": "Grandland",
+                "version": "EL 210 73kWh F GS Sky",
+                "jato_code": None,
+                "fuel_type": "Electric",
+                "num_doors": 5,
+                "hp": 213,
+                "c02_emission": 0.00,
+                "battery_range": 582.00,
+                "vehicle_price": 260408.00,
+                "options_price": 0.00,
+                "accessories_price": 15700.00,
+                "delivery_cost": 13720.00,
+                "registration_tax": 0.00,
+                "total_net_investment": 284928.00,
+                "taxation_value": 329990.00,
+                "financial_rate": 5.30,
+                "depreciation_interest": 4310.27,
+                "maintenance_repair": 363.12,
+                "insurance_cost": 318.80,
+                "green_tax": 70.00,
+                "management_fee": 65.00,
+                "tyres_cost": 419.60,
+                "roadside_assistance": 30.00,
+                "total_monthly_lease": 5576.79
+            },
+            "quotation_6351624001_Georges__Jean-Francois.pdf": {
+                "customer": "Philips Belgium Commercial SA/NV",
+                "driver_name": "Jean-Francois Georges",
+                "vendor": "Aayvens",
+                "vehicle_description": "SKODA ELROQ BEV 82KWH 85 CORPORATE",
+                "duration_months": 60,
+                "total_mileage": 175000,
+                "monthly_rental": 666.47,
+                "upfront_costs": 0,
+                "deposit": 0,
+                "admin_fees": None,
+                "maintenance_included": True,
+                "excess_mileage_rate": None,
+                "unused_mileage_rate": None,
+                "currency": "€",
+                "parsing_confidence": 0.90,
+                "warnings": ["Could not parse specific financial breakdown"],
+                "quote_number": "6351624/001",
+                "manufacturer": "Skoda",
+                "model": "Elroq",
+                "version": "BEV 82KWH 85 CORPORATE",
+                "jato_code": None,
+                "fuel_type": "Electric",
+                "num_doors": 5,
+                "hp": 286,
+                "c02_emission": None,
+                "battery_range": None,
+                "vehicle_price": 39991.74,
+                "options_price": 3120.07,
+                "accessories_price": None,
+                "delivery_cost": 326.45,
+                "registration_tax": None,
+                "total_net_investment": 37113.05,
+                "taxation_value": None,
+                "financial_rate": None,
+                "depreciation_interest": None,
+                "maintenance_repair": None,
+                "insurance_cost": None,
+                "green_tax": None,
+                "management_fee": None,
+                "tyres_cost": None,
+                "roadside_assistance": None,
+                "total_monthly_lease": 666.47
             }
         }
         
@@ -327,16 +475,20 @@ def create_default_template() -> io.BytesIO:
         'Field': [
             'Quote number', 'Driver name', 'Vehicle Description', 'Manufacturer', 'Model',
             'Version', 'JATO code', 'Fuel type', 'No. doors', 'Number of gears', 'HP',
-            'C02 emission WLTP (g/km)', 'Battery range', 'Investment',
-            'Vehicle list price (excl. VAT, excl. options)', 'Options (excl. taxes)',
+            'C02 emission WLTP (g/km)', 'Battery range',
+            'Investment', 'Vehicle list price (excl. VAT, excl. options)', 'Options (excl. taxes)',
             'Accessories (excl. taxes)', 'Delivery fee', 'Registration tax',
-            'Total net investment', 'Taxation', 'Taxation value', 'Duration & Mileage',
-            'Term (months)', 'Mileage per year (in km)', 'Financial rate',
-            'Monthly financial rate (depreciation + interest)', 'Other fixed cost',
-            'Maintenance, repairs and tires', 'Insurance', 'Administration fee',
-            'Fixed costs', 'Leasing payment', 'Excess costs', 'Total cost', 'Winner'
+            'Total net investment',
+            'Taxation', 'Taxation value',
+            'Duration & Mileage', 'Term (months)', 'Mileage per year (in km)',
+            'Financial rate', 'Monthly financial rate (depreciation + interest)',
+            'Service rate', 'Maintenance & repair', 'Electricity cost*', 'EV charging station at home*', 'Road side assistance', 'Insurance', 'Green tax*', 'Management fee', 'Tyres (summer and winter)', 'Total monthly service rate',
+            'Monthly fee', 'Total monthly lease ex. VAT',
+            'Excess / unused km', 'Excess kilometers', 'Unused kilometers',
+            'Equipment', 'Additional equipment',
+            'Total cost', 'Winner'
         ],
-        'Value': [None] * 36
+        'Value': [None] * 45
     }
     df = pd.DataFrame(template_data)
     buffer = io.BytesIO()
@@ -402,14 +554,35 @@ def process_offers(template_buffer, uploaded_files):
     # These are hardcoded for now, but in a real app would be dynamic
     mapping_suggestions['Quote number'] = 'quote_number'
     mapping_suggestions['Driver name'] = 'driver_name'
-    mapping_suggestions['Manufacturer'] = 'vehicle_description'
-    mapping_suggestions['Model'] = 'vehicle_description'
-    mapping_suggestions['Version'] = 'vehicle_description'
-    mapping_suggestions['Fuel type'] = 'vehicle_description'
+    mapping_suggestions['Manufacturer'] = 'manufacturer'
+    mapping_suggestions['Model'] = 'model'
+    mapping_suggestions['Version'] = 'version'
+    mapping_suggestions['JATO code'] = 'jato_code'
+    mapping_suggestions['Fuel type'] = 'fuel_type'
+    mapping_suggestions['No. doors'] = 'num_doors'
+    mapping_suggestions['HP'] = 'hp'
+    mapping_suggestions['C02 emission WLTP (g/km)'] = 'c02_emission'
+    mapping_suggestions['Battery range'] = 'battery_range'
+    mapping_suggestions['Vehicle list price (excl. VAT, excl. options)'] = 'vehicle_price'
+    mapping_suggestions['Options (excl. taxes)'] = 'options_price'
+    mapping_suggestions['Accessories (excl. taxes)'] = 'accessories_price'
+    mapping_suggestions['Delivery fee'] = 'delivery_cost'
+    mapping_suggestions['Registration tax'] = 'registration_tax'
+    mapping_suggestions['Total net investment'] = 'total_net_investment'
+    mapping_suggestions['Taxation value'] = 'taxation_value'
     mapping_suggestions['Term (months)'] = 'duration_months'
     mapping_suggestions['Mileage per year (in km)'] = 'total_mileage'
-    mapping_suggestions['Total TCO'] = 'total_contract_cost'
-    mapping_suggestions['Monthly TCO'] = 'monthly_rental'
+    mapping_suggestions['Financial rate'] = 'financial_rate'
+    mapping_suggestions['Monthly financial rate (depreciation + interest)'] = 'depreciation_interest'
+    mapping_suggestions['Maintenance & repair'] = 'maintenance_repair'
+    mapping_suggestions['Insurance'] = 'insurance_cost'
+    mapping_suggestions['Green tax*'] = 'green_tax'
+    mapping_suggestions['Management fee'] = 'management_fee'
+    mapping_suggestions['Tyres (summer and winter)'] = 'tyres_cost'
+    mapping_suggestions['Road side assistance'] = 'roadside_assistance'
+    mapping_suggestions['Total monthly lease ex. VAT'] = 'monthly_rental'
+    mapping_suggestions['Excess kilometers'] = 'excess_mileage_rate'
+    mapping_suggestions['Unused kilometers'] = 'unused_mileage_rate'
     
     user_mapping = {}
     with st.sidebar.expander("📝 Field Mappings"):
@@ -491,8 +664,8 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
             continue
 
         # Add a blank row if the field is a new section header
-        if template_field in ['Driver name', 'Vehicle Description', 'Investment', 'Total net investment', 'Taxation', 'Taxation value', 'Duration & Mileage', 'Mileage per year (in km)', 'Financial rate', 'Monthly financial rate (depreciation + interest)', 'Other fixed cost', 'Maintenance, repairs and tires', 'Fixed costs', 'Leasing payment', 'Excess costs']:
-             final_report_df_rows.append([''] * len(leasing_company_row))
+        if template_field in ['Driver name', 'Vehicle Description', 'Investment', 'Taxation', 'Duration & Mileage', 'Financial rate', 'Service rate', 'Monthly fee', 'Excess / unused km', 'Equipment', 'Total cost', 'Winner']:
+             final_report_df_rows.append([''] * (len(vendors) + 1))
 
         # Add the field row with values from each offer
         new_row = [template_field]
@@ -501,17 +674,28 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
             val = None
             if llm_field_name:
                 try:
-                    if template_field == 'Manufacturer':
-                        val = str(offer.get('vehicle_description', "")).split()[0] if offer.get('vehicle_description') else None
-                    elif template_field == 'Model':
-                        val = " ".join(str(offer.get('vehicle_description', "")).split()[1:]) if offer.get('vehicle_description') else None
-                    elif template_field == 'Fuel type':
-                        val = 'EV' if 'el' in str(offer.get('vehicle_description', "")).lower() else None
-                    elif template_field == 'Mileage per year (in km)':
-                        if offer.get('duration_months') and offer.get('total_mileage'):
-                            val = int(offer.get('total_mileage') / (offer.get('duration_months') / 12))
-                    elif llm_field_name in offer:
-                        val = offer.get(llm_field_name)
+                    if llm_field_name in offer:
+                        if template_field == 'Mileage per year (in km)':
+                            if offer.get('duration_months') and offer.get('total_mileage'):
+                                val = int(offer.get('total_mileage') / (offer.get('duration_months') / 12))
+                            else:
+                                val = None
+                        elif template_field == 'Total monthly service rate':
+                            # Sum of all service-related costs
+                            val = sum([
+                                offer.get('maintenance_repair', 0),
+                                offer.get('roadside_assistance', 0),
+                                offer.get('insurance_cost', 0),
+                                offer.get('green_tax', 0),
+                                offer.get('management_fee', 0),
+                                offer.get('tyres_cost', 0)
+                            ])
+                            if val == 0: val = None
+                        elif template_field == 'Total monthly lease ex. VAT':
+                            # This is already a key in the parsed offer
+                            val = offer.get(llm_field_name)
+                        else:
+                             val = offer.get(llm_field_name)
                 except (ValueError, TypeError):
                     val = "N/A"
             new_row.append(val)
