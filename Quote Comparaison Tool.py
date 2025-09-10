@@ -477,7 +477,7 @@ def create_default_template() -> io.BytesIO:
             'Version', 'JATO code', 'Fuel type', 'No. doors', 'Number of gears', 'HP',
             'C02 emission WLTP (g/km)', 'Battery range',
             'Investment', 'Vehicle list price (excl. VAT, excl. options)', 'Options (excl. taxes)',
-            'Accessories (excl. taxes)', 'Delivery fee', 'Registration tax',
+            'Accessories (excl. taxes)', 'Delivery cost', 'Registration tax',
             'Total net investment',
             'Taxation', 'Taxation value',
             'Duration & Mileage', 'Term (months)', 'Mileage per year (in km)',
@@ -554,6 +554,7 @@ def process_offers(template_buffer, uploaded_files):
     # These are hardcoded for now, but in a real app would be dynamic
     mapping_suggestions['Quote number'] = 'quote_number'
     mapping_suggestions['Driver name'] = 'driver_name'
+    mapping_suggestions['Vehicle Description'] = 'vehicle_description'
     mapping_suggestions['Manufacturer'] = 'manufacturer'
     mapping_suggestions['Model'] = 'model'
     mapping_suggestions['Version'] = 'version'
@@ -566,7 +567,7 @@ def process_offers(template_buffer, uploaded_files):
     mapping_suggestions['Vehicle list price (excl. VAT, excl. options)'] = 'vehicle_price'
     mapping_suggestions['Options (excl. taxes)'] = 'options_price'
     mapping_suggestions['Accessories (excl. taxes)'] = 'accessories_price'
-    mapping_suggestions['Delivery fee'] = 'delivery_cost'
+    mapping_suggestions['Delivery cost'] = 'delivery_cost'
     mapping_suggestions['Registration tax'] = 'registration_tax'
     mapping_suggestions['Total net investment'] = 'total_net_investment'
     mapping_suggestions['Taxation value'] = 'taxation_value'
@@ -580,9 +581,10 @@ def process_offers(template_buffer, uploaded_files):
     mapping_suggestions['Management fee'] = 'management_fee'
     mapping_suggestions['Tyres (summer and winter)'] = 'tyres_cost'
     mapping_suggestions['Road side assistance'] = 'roadside_assistance'
-    mapping_suggestions['Total monthly lease ex. VAT'] = 'monthly_rental'
+    mapping_suggestions['Total monthly lease ex. VAT'] = 'total_monthly_lease'
     mapping_suggestions['Excess kilometers'] = 'excess_mileage_rate'
     mapping_suggestions['Unused kilometers'] = 'unused_mileage_rate'
+    mapping_suggestions['Additional equipment'] = 'accessories_price'
     
     user_mapping = {}
     with st.sidebar.expander("📝 Field Mappings"):
@@ -704,20 +706,45 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
     # Create the DataFrame from the collected rows
     final_report_df = pd.DataFrame(final_report_df_rows, columns=['Field'] + vendors)
 
-    # Vehicle Description Correspondence calculation
-    if not offers_df.empty and len(offers_df) > 1:
-        base_desc = offers_df.loc[0, 'vehicle_description'] or ""
+    # Calculate and add the single "Vehicle description correspondence" value
+    if len(offers_df) > 1:
+        vehicle_info_fields = [
+            'vehicle_description', 'manufacturer', 'model', 'version', 'jato_code',
+            'fuel_type', 'num_doors', 'hp', 'c02_emission', 'battery_range',
+            'accessories_price'
+        ]
         
-        # Add a new row for correspondence
-        new_row = ['Vehicle description correspondence']
+        # Concatenate relevant information for each offer into a single string
+        vehicle_strings = []
         for _, offer in offers_df.iterrows():
-            desc_to_compare = offer.get('vehicle_description', "")
-            similarity = calculate_similarity_score(base_desc, desc_to_compare)
-            new_row.append(f"{similarity:.1f}%")
+            combined_info = " ".join([str(offer.get(f, '')) for f in vehicle_info_fields if offer.get(f) is not None])
+            vehicle_strings.append(combined_info)
+            
+        # Calculate pairwise similarity and average the scores
+        total_similarity = 0
+        pair_count = 0
+        for i in range(len(vehicle_strings)):
+            for j in range(i + 1, len(vehicle_strings)):
+                score = calculate_similarity_score(vehicle_strings[i], vehicle_strings[j])
+                total_similarity += score
+                pair_count += 1
+                
+        # Handle the case of no pairs
+        average_similarity = total_similarity / pair_count if pair_count > 0 else 100
+        
+        # Find the correct row index for "Vehicle description correspondence"
+        row_index = final_report_df[final_report_df['Field'] == 'Vehicle Description'].index
+        if not row_index.empty:
+            # Add the new row just below 'Additional equipment'
+            new_row = ['Vehicle description correspondence'] + [''] * len(vendors)
+            new_row[1] = f"{average_similarity:.1f}%"
+            
+            # Find the index of 'Additional equipment' to insert the new row below it
+            equipment_row_index = final_report_df[final_report_df['Field'] == 'Additional equipment'].index
+            if not equipment_row_index.empty:
+                insert_idx = equipment_row_index[0] + 1
+                final_report_df = pd.concat([final_report_df.iloc[:insert_idx], pd.DataFrame([new_row], columns=final_report_df.columns), final_report_df.iloc[insert_idx:]], ignore_index=True)
 
-        # Pad the row to ensure it has the same number of columns
-        new_row += [''] * (len(final_report_df.columns) - len(new_row))
-        final_report_df.loc[len(final_report_df)] = new_row
 
     # Add Cost Analysis Summary at the bottom
     final_report_df.loc[len(final_report_df)] = [''] * len(final_report_df.columns)
