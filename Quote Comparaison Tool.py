@@ -754,7 +754,7 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
     cost_data = OfferComparator(offers, {}).calculate_total_costs()
     sorted_offers = pd.DataFrame(cost_data).sort_values('total_contract_cost')
     
-    # Add vendor, total cost, monthly cost, and winner row
+    # Add vendor, total cost, and monthly cost rows
     vendor_row = ['Vendor'] + [row['vendor'] for _, row in sorted_offers.iterrows()]
     total_cost_row = ['Total Cost'] + [f"{row['total_contract_cost']:,.2f}" for _, row in sorted_offers.iterrows()]
     monthly_cost_row = ['Monthly Cost'] + [f"{row['cost_per_month']:,.2f}" for _, row in sorted_offers.iterrows()]
@@ -782,23 +782,24 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
         workbook = writer.book
         worksheet = writer.sheets['Quotation']
         
-        # Define a bold format
+        # Define a bold and colored format
+        bold_and_colored = workbook.add_format({'bold': True, 'bg_color': '#7FFFD4'})
         bold = workbook.add_format({'bold': True})
 
-        # Apply bold formatting to specific cells based on the updated DataFrame
+        # Apply formatting
         for row_idx, row in enumerate(final_report_df.values):
-            for col_idx, cell_value in enumerate(row):
-                # Bold the field name and its corresponding value
-                is_bold_field = False
-                if cell_value and row[0] in ['Leasing company', 'Driver name', 'Vehicle Description', 'Vehicle description correspondence']:
-                    worksheet.write(row_idx, col_idx, cell_value, bold)
-                
-                # Check for "Winner" and bold
-                if cell_value == '🥇 Winner':
-                    worksheet.write(row_idx, col_idx, cell_value, bold)
-                    # Also bold the corresponding monthly cost from the row above
-                    winning_monthly_cost = final_report_df.iloc[row_idx - 1, col_idx]
-                    worksheet.write(row_idx - 1, col_idx, winning_monthly_cost, bold)
+            # Bold and color the field name and its corresponding value
+            if row[0] in ['Leasing company', 'Driver name', 'Vehicle Description', 'Vehicle description correspondence']:
+                worksheet.write(row_idx, 0, row[0], bold)
+                for col_idx in range(1, len(row)):
+                    worksheet.write(row_idx, col_idx, row[col_idx], bold_and_colored)
+
+            # Highlight winner and corresponding monthly cost
+            if '🥇 Winner' in row:
+                winner_col_idx = list(row).index('🥇 Winner')
+                worksheet.write(row_idx, winner_col_idx, row[winner_col_idx], bold_and_colored)
+                winning_monthly_cost = final_report_df.iloc[row_idx - 1, winner_col_idx]
+                worksheet.write(row_idx - 1, winner_col_idx, winning_monthly_cost, bold_and_colored)
 
     
     buffer.seek(0)
