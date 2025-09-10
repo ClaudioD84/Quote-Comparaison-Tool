@@ -831,6 +831,9 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
         bold_and_colored_format = workbook.add_format({'bold': True, 'bg_color': '#87E990'})
         
         bold_format = workbook.add_format({'bold': True})
+        
+        # Define a format for the 'Gap analysis' row with text wrap
+        wrap_format = workbook.add_format({'text_wrap': True})
 
         # Apply formatting
         for row_idx, row in enumerate(final_report_df.values):
@@ -861,13 +864,16 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
                 
                 worksheet.write(vendor_row_idx, winner_col_idx, winning_vendor, bold_and_colored_format)
                 worksheet.write(total_cost_row_idx, winner_col_idx, winning_total_cost, bold_and_colored_format)
+                
+            # Apply wrap text format to 'Gap analysis' row
+            if row[0] == 'Gap analysis':
+                gap_analysis_row_idx = final_report_df[final_report_df['Field'] == 'Gap analysis'].index[0]
+                for col_idx in range(1, len(row)):
+                    worksheet.write(gap_analysis_row_idx, col_idx, final_report_df.iloc[gap_analysis_row_idx, col_idx], wrap_format)
 
         # Autofit columns
         for i, col in enumerate(final_report_df.columns):
             max_len = final_report_df[col].astype(str).map(len).max()
-            if final_report_df.iloc[final_report_df[final_report_df['Field'] == 'Gap analysis'].index[0]][i]:
-                # Heuristic for 'Gap analysis' to ensure text is visible
-                max_len = max(max_len, 50)
             worksheet.set_column(i, i, max_len + 2)
             
     buffer.seek(0)
