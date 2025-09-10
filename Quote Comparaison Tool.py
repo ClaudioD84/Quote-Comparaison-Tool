@@ -423,7 +423,7 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
     for offer in offers:
         offer_dict = asdict(offer)
         offer_dict['total_contract_cost'] = (offer.monthly_rental * offer.duration_months) + (offer.upfront_costs or 0) + (offer.deposit or 0) + (offer.admin_fees or 0)
-        offer_data_for_df.append(offer_dict)
+        offer_data_for_pd.concat(offer_dict)
     
     offers_df = pd.DataFrame(offer_data_for_df)
     
@@ -482,13 +482,13 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
     cost_data = OfferComparator(offers, {}).calculate_total_costs()
     sorted_offers = pd.DataFrame(cost_data).sort_values('total_contract_cost')
     
-    report_df = report_df.append(pd.Series(), ignore_index=True)
-    report_df = report_df.append(pd.Series(['Cost Analysis', None, None, None, None, None], index=report_df.columns), ignore_index=True)
-    report_df = report_df.append(pd.Series(['Vendor', 'Total Cost', 'Monthly Cost', 'Winner'], index=report_df.columns), ignore_index=True)
+    report_df = report_pd.concat(pd.Series(), ignore_index=True)
+    report_df = report_pd.concat(pd.Series(['Cost Analysis', None, None, None, None, None], index=report_df.columns), ignore_index=True)
+    report_df = report_pd.concat(pd.Series(['Vendor', 'Total Cost', 'Monthly Cost', 'Winner'], index=report_df.columns), ignore_index=True)
 
     for index, row in sorted_offers.iterrows():
         is_winner = "🥇 Winner" if index == 0 else ""
-        report_df = report_df.append(
+        report_df = report_pd.concat(
             pd.Series([row['vendor'], f"{row['total_contract_cost']:,.2f}", f"{row['cost_per_month']:,.2f}", is_winner], index=report_df.columns),
             ignore_index=True
         )
