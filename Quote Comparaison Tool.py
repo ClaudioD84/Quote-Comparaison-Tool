@@ -783,7 +783,7 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
         worksheet = writer.sheets['Quotation']
         
         # Define a bold and colored format
-        bold_and_colored = workbook.add_format({'bold': True, 'bg_color': '#7FFFD4'})
+        bold_and_colored = workbook.add_format({'bold': True, 'bg_color': '#87E990'})
         bold = workbook.add_format({'bold': True})
 
         # Apply formatting
