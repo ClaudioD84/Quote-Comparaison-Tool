@@ -289,4 +289,4 @@ def create_demo_data():
     st.success("Demo data loaded! Please click the 'Compare Offers' button to proceed.")
     return uploaded_files
 
-def create_default_template()
+def create_default_template():
