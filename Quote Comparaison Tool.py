@@ -782,8 +782,8 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
         workbook = writer.book
         worksheet = writer.sheets['Quotation']
         
-        # Define a bold and colored format for #7FFFD4
-        bold_and_colored_1 = workbook.add_format({'bold': True, 'bg_color': '#7FFFD4'})
+        # Define a bold and colored format for #87E990
+        bold_and_colored_1 = workbook.add_format({'bold': True, 'bg_color': '#87E990'})
         
         # Define a bold and colored format for #87E990
         bold_and_colored_2 = workbook.add_format({'bold': True, 'bg_color': '#87E990'})
@@ -802,10 +802,10 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
             if '🥇 Winner' in row:
                 winner_col_idx = list(row).index('🥇 Winner')
                 
-                # Highlight the Winner row cell with color #7FFFD4
+                # Highlight the Winner row cell with color #87E990
                 worksheet.write(row_idx, winner_col_idx, row[winner_col_idx], bold_and_colored_1)
 
-                # Find the 'Monthly Cost' row and highlight it with color #7FFFD4
+                # Find the 'Monthly Cost' row and highlight it with color #87E990
                 monthly_cost_row_idx = final_report_df[final_report_df['Field'] == 'Monthly Cost'].index[0]
                 winning_monthly_cost = final_report_df.iloc[monthly_cost_row_idx, winner_col_idx]
                 worksheet.write(monthly_cost_row_idx, winner_col_idx, winning_monthly_cost, bold_and_colored_1)
