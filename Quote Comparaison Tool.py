@@ -195,7 +195,7 @@ class LLMParser:
         
         # Mocking the LLM's response for demonstration
         mock_responses = {
-            "KontraktoplÃ¦g_3052514001_1 (1).pdf": {
+            "Kontraktoplæg_3052514001_1 (1).pdf": {
                 "customer": "Grundfos A/S",
                 "driver_name": None,
                 "vendor": "Ayvens",
@@ -238,7 +238,7 @@ class LLMParser:
                 "roadside_assistance": 19.46,
                 "total_monthly_lease": 5871.39,
                 "options_list": [
-                    {"name": "lÃ¦der pakke", "price": 16000.00},
+                    {"name": "læder pakke", "price": 16000.00},
                     {"name": "Hvid", "price": 9600.00}
                 ],
                 "accessories_list": [
@@ -402,7 +402,7 @@ def create_demo_data():
     st.info("Loading demo data...")
     # These mock files contain the text content from the PDFs the user provided
     demo_offers = [
-        ("KontraktoplÃ¦g_3052514001_1 (1).pdf", "KontraktoplÃ¦g 3052514/001 ... Periode (mdr.): 48 ... Kilometer pr. Ã¥r: 35.000 ... Leasinggiver: Ayvens ..."),
+        ("Kontraktoplæg_3052514001_1 (1).pdf", "Kontraktoplæg 3052514/001 ... Periode (mdr.): 48 ... Kilometer pr. år: 35.000 ... Leasinggiver: Ayvens ..."),
         ("quotation  2508.120.036 (1).pdf", "ARVAL ... quotation: 2508.120.03610/ ... contract annual kilometres/term (month): 35.000/48 ... price per month excl. VAT: 5.576,79 ...")
     ]
     uploaded_files = []
@@ -435,10 +435,9 @@ def create_default_template() -> io.BytesIO:
             'Term (months)', 'Mileage per year (in km)', 'Financial rate',
             'Monthly financial rate (depreciation + interest)', 'Other fixed cost',
             'Maintenance, repairs and tires', 'Insurance', 'Administration fee',
-            'Fixed costs', 'Leasing payment', 'Excess costs', 'Total cost', 'Winner',
-            'Additional equipment', 'Additional equipment price'
+            'Fixed costs', 'Leasing payment', 'Excess costs', 'Total cost', 'Winner'
         ],
-        'Value': [None] * 38
+        'Value': [None] * 36
     }
     df = pd.DataFrame(template_data)
     buffer = io.BytesIO()
@@ -510,12 +509,9 @@ def process_offers(template_buffer, uploaded_files):
     mapping_suggestions['Mileage per year (in km)'] = 'total_mileage'
     mapping_suggestions['Total TCO'] = 'total_contract_cost'
     mapping_suggestions['Monthly TCO'] = 'monthly_rental'
-    # Add the new mappings for equipment
-    mapping_suggestions['Additional equipment'] = 'equipment_combined'
-    mapping_suggestions['Additional equipment price'] = 'equipment_price_total'
     
     user_mapping = {}
-    with st.sidebar.expander("🔍 Field Mappings"):
+    with st.sidebar.expander("📝 Field Mappings"):
         for template_field, suggested_llm_field in mapping_suggestions.items():
             user_mapping[template_field] = st.text_input(
                 f"Map '{template_field}' to which LLM field?", 
@@ -594,25 +590,8 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
                     elif template_field == 'Mileage per year (in km)':
                         val = offer.get(llm_field_name, 0) / (offer.get('duration_months', 12) / 12) if offer.get(llm_field_name) else None
                     elif template_field == 'Additional equipment':
-                        # Combine all equipment names from options and accessories
-                        all_equipment_names = []
-                        for item in offer.get('options_list', []):
-                            if item.get('name'):
-                                all_equipment_names.append(item['name'])
-                        for item in offer.get('accessories_list', []):
-                            if item.get('name'):
-                                all_equipment_names.append(item['name'])
-                        val = ",".join(all_equipment_names) if all_equipment_names else None
-                    elif template_field == 'Additional equipment price':
-                        # Sum all equipment prices from options and accessories
-                        total_equipment_price = 0
-                        for item in offer.get('options_list', []):
-                            if item.get('price'):
-                                total_equipment_price += item['price']
-                        for item in offer.get('accessories_list', []):
-                            if item.get('price'):
-                                total_equipment_price += item['price']
-                        val = total_equipment_price if total_equipment_price > 0 else None
+                        all_equipment_names = [item['name'] for item in offer.get('options_list', []) + offer.get('accessories_list', [])]
+                        val = ", ".join(all_equipment_names) if all_equipment_names else None
                     else:
                         val = offer.get(llm_field_name)
                     
