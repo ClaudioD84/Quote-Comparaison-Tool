@@ -1,15 +1,3 @@
-"""
-AI-Powered Fleet Leasing Offer Comparator - Streamlit App
-This version uses a Large Language Model (LLM) to intelligently parse PDF content.
-Author: Fleet Management Tool
-Requirements:
-  streamlit, pandas, numpy, pdfplumber, python-dateutil, xlsxwriter
-Notes:
-  - This version uses a mock API call to demonstrate the LLM functionality.
-  - You can replace the mock logic with a real API call to a service like Gemini.
-  - The LLM can handle various languages and formats without needing specific regex rules.
-"""
-
 import io
 import re
 import sys
@@ -772,7 +760,7 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
         if template_field in ['Quote number', 'Winner']:
             continue
         
-        # Handle the special cases for 'Equipment' section
+        # --- START: New logic for itemizing equipment ---
         if template_field == 'Equipment':
             # Add a blank row for spacing
             final_report_df_rows.append([''] * (len(vendors) + 1))
@@ -804,6 +792,7 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
             final_report_df_rows.append(total_accessories_row)
 
             continue # Skip the rest of the loop for this field
+        # --- END: New logic for itemizing equipment ---
 
         # Add a blank row if the field is a new section header
         if template_field in ['Driver name', 'Vehicle Description', 'Investment', 'Taxation', 'Duration & Mileage', 'Financial rate', 'Service rate', 'Monthly fee', 'Excess / unused km', 'Total cost']:
