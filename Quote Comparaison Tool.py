@@ -200,6 +200,31 @@ class LLMParser:
         # Fallback for unknown files or if real API call fails
         return ParsedOffer(filename=filename, warnings=["LLM parsing failed or is not configured."], parsing_confidence=0.1)
 
+def consolidate_names(offers: List[ParsedOffer]) -> Tuple[str, str]:
+    """Consolidate customer and driver names from a list of parsed offers."""
+    common_customer = None
+    driver_name = None
+
+    # Find a common driver name
+    for offer in offers:
+        if offer.driver_name:
+            driver_name = offer.driver_name
+            break
+
+    # Find a common customer name
+    customer_names = [o.customer for o in offers if o.customer]
+    if customer_names:
+        # Simple consolidation: find the shortest common starting string
+        first_name = customer_names[0].split()[0]
+        if all(name.startswith(first_name) for name in customer_names):
+            common_customer = first_name
+        else:
+            # If no simple match, use the first customer name found
+            common_customer = customer_names[0]
+            
+    return common_customer, driver_name
+
+
 class OfferComparator:
     """Handles comparison and analysis of multiple offers"""
     
@@ -360,7 +385,13 @@ def process_offers(template_buffer, uploaded_files):
     if not offers or not any(o.parsing_confidence > 0 for o in offers):
         st.error("❌ No offers could be processed successfully. Please check the file format.")
         return
-    
+        
+    # Consolidate customer and driver names before validation
+    common_customer, common_driver = consolidate_names(offers)
+    for offer in offers:
+        offer.customer = common_customer
+        offer.driver_name = common_driver
+
     display_parsing_results(offers)
     
     # User-editable mapping section
