@@ -488,7 +488,7 @@ def create_default_template() -> io.BytesIO:
             'Equipment', 'Additional equipment',
             'Total cost', 'Winner'
         ],
-        'Value': [None] * 45
+        'Value': [None] * 46
     }
     df = pd.DataFrame(template_data)
     buffer = io.BytesIO()
