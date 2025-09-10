@@ -29,6 +29,9 @@ import pandas as pd
 import numpy as np
 import pdfplumber
 from dateutil import parser as dateparser
+from openpyxl import Workbook
+from openpyxl.utils.dataframe import dataframe_to_rows
+from openpyxl.styles import Font
 
 # Configure logging
 @st.cache_resource
@@ -661,12 +664,12 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
     for index, row in template_df.iterrows():
         template_field = row['Field']
         
-        # Skip the Quote number row as it's already added
-        if template_field == 'Quote number':
+        # Skip the Quote number and Winner rows as they are handled separately
+        if template_field in ['Quote number', 'Winner']:
             continue
 
         # Add a blank row if the field is a new section header
-        if template_field in ['Driver name', 'Vehicle Description', 'Investment', 'Taxation', 'Duration & Mileage', 'Financial rate', 'Service rate', 'Monthly fee', 'Excess / unused km', 'Equipment', 'Total cost', 'Winner']:
+        if template_field in ['Driver name', 'Vehicle Description', 'Investment', 'Taxation', 'Duration & Mileage', 'Financial rate', 'Service rate', 'Monthly fee', 'Excess / unused km', 'Equipment', 'Total cost']:
              final_report_df_rows.append([''] * (len(vendors) + 1))
 
         # Add the field row with values from each offer
@@ -733,17 +736,15 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
         average_similarity = total_similarity / pair_count if pair_count > 0 else 100
         
         # Find the correct row index for "Vehicle description correspondence"
-        row_index = final_report_df[final_report_df['Field'] == 'Vehicle Description'].index
+        row_index = final_report_df[final_report_df['Field'] == 'Additional equipment'].index
         if not row_index.empty:
-            # Add the new row just below 'Additional equipment'
+            insert_idx = row_index[0] + 1
+            # Add a blank row first
+            final_report_df = pd.concat([final_report_df.iloc[:insert_idx], pd.DataFrame([[''] * (len(vendors) + 1)], columns=final_report_df.columns), final_report_df.iloc[insert_idx:]], ignore_index=True)
+            # Then add the correspondence row
             new_row = ['Vehicle description correspondence'] + [''] * len(vendors)
             new_row[1] = f"{average_similarity:.1f}%"
-            
-            # Find the index of 'Additional equipment' to insert the new row below it
-            equipment_row_index = final_report_df[final_report_df['Field'] == 'Additional equipment'].index
-            if not equipment_row_index.empty:
-                insert_idx = equipment_row_index[0] + 1
-                final_report_df = pd.concat([final_report_df.iloc[:insert_idx], pd.DataFrame([new_row], columns=final_report_df.columns), final_report_df.iloc[insert_idx:]], ignore_index=True)
+            final_report_df = pd.concat([final_report_df.iloc[:insert_idx + 1], pd.DataFrame([new_row], columns=final_report_df.columns), final_report_df.iloc[insert_idx + 1:]], ignore_index=True)
 
 
     # Add Cost Analysis Summary at the bottom
@@ -778,6 +779,27 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
         final_report_df.to_excel(writer, sheet_name='Quotation', index=False, header=False)
+        workbook = writer.book
+        worksheet = writer.sheets['Quotation']
+        
+        # Define a bold format
+        bold = workbook.add_format({'bold': True})
+
+        # Apply bold formatting to specific cells based on the updated DataFrame
+        for row_idx, row in enumerate(final_report_df.values):
+            for col_idx, cell_value in enumerate(row):
+                # Bold the field name and its corresponding value
+                is_bold_field = False
+                if cell_value and row[0] in ['Leasing company', 'Driver name', 'Vehicle Description', 'Vehicle description correspondence']:
+                    worksheet.write(row_idx, col_idx, cell_value, bold)
+                
+                # Check for "Winner" and bold
+                if cell_value == '🥇 Winner':
+                    worksheet.write(row_idx, col_idx, cell_value, bold)
+                    # Also bold the corresponding monthly cost from the row above
+                    winning_monthly_cost = final_report_df.iloc[row_idx - 1, col_idx]
+                    worksheet.write(row_idx - 1, col_idx, winning_monthly_cost, bold)
+
     
     buffer.seek(0)
     return buffer
