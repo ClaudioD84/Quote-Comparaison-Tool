@@ -871,10 +871,15 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
                 for col_idx in range(1, len(row)):
                     worksheet.write(gap_analysis_row_idx, col_idx, final_report_df.iloc[gap_analysis_row_idx, col_idx], wrap_format)
 
-        # Autofit columns
+        # Fix column widths to prevent the wrapped text from making them too wide
         for i, col in enumerate(final_report_df.columns):
-            max_len = final_report_df[col].astype(str).map(len).max()
-            worksheet.set_column(i, i, max_len + 2)
+            if i > 0:
+                # Set a fixed, reasonable width for the offer columns
+                worksheet.set_column(i, i, 50)
+            else:
+                # Autofit the 'Field' column
+                max_len = final_report_df[col].astype(str).map(len).max()
+                worksheet.set_column(i, i, max_len + 2)
             
     buffer.seek(0)
     return buffer
