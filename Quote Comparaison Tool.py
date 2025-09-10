@@ -113,6 +113,9 @@ class ParsedOffer:
     total_monthly_lease: Optional[float] = None
     driver_name: Optional[str] = None
     customer: Optional[str] = None
+    # New fields for itemized lists
+    options_list: List[Dict[str, Union[str, float]]] = field(default_factory=list)
+    accessories_list: List[Dict[str, Union[str, float]]] = field(default_factory=list)
 
 def normalize_currency(currency_str: Optional[str]) -> Optional[str]:
     """Normalize currency string to a standard code."""
@@ -206,7 +209,9 @@ class LLMParser:
                         "roadside_assistance": {"type": "NUMBER"},
                         "total_monthly_lease": {"type": "NUMBER"},
                         "driver_name": {"type": "STRING"},
-                        "customer": {"type": "STRING"}
+                        "customer": {"type": "STRING"},
+                        "options_list": {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {"name": {"type": "STRING"}, "price": {"type": "NUMBER"}}}},
+                        "accessories_list": {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {"name": {"type": "STRING"}, "price": {"type": "NUMBER"}}}}
                     }
                 }
             }
@@ -256,7 +261,14 @@ class LLMParser:
                 "management_fee": 25.00,
                 "tyres_cost": 687.43,
                 "roadside_assistance": 19.46,
-                "total_monthly_lease": 5871.39
+                "total_monthly_lease": 5871.39,
+                "options_list": [
+                    {"name": "læder pakke", "price": 16000.00},
+                    {"name": "Hvid", "price": 9600.00}
+                ],
+                "accessories_list": [
+                    {"name": "Vinterhjul", "price": 6200.00}
+                ]
             },
             "quotation  2508.120.036 (1).pdf": {
                 "customer": "Grundfos EV",
@@ -300,7 +312,12 @@ class LLMParser:
                 "management_fee": 65.00,
                 "tyres_cost": 419.60,
                 "roadside_assistance": 30.00,
-                "total_monthly_lease": 5576.79
+                "total_monthly_lease": 5576.79,
+                "options_list": [],
+                "accessories_list": [
+                    {"name": "Pre-equipment", "price": 6000.00},
+                    {"name": "Winter tyres", "price": 9700.00}
+                ]
             },
             "quotation_6351624001_Georges__Jean-Francois.pdf": {
                 "customer": "Philips Belgium Commercial SA/NV",
@@ -344,7 +361,9 @@ class LLMParser:
                 "management_fee": None,
                 "tyres_cost": None,
                 "roadside_assistance": None,
-                "total_monthly_lease": 666.47
+                "total_monthly_lease": 666.47,
+                "options_list": [{"name": "Loft interior design", "price": 3120.07}],
+                "accessories_list": []
             }
         }
         
@@ -502,7 +521,7 @@ def create_default_template() -> io.BytesIO:
             'Equipment', 'Additional equipment', 'Additional equipment price',
             'Total cost', 'Winner'
         ],
-        'Value': [None] * 47  # Corrected from 46 to 47
+        'Value': [None] * 47
     }
     df = pd.DataFrame(template_data)
     buffer = io.BytesIO()
@@ -643,11 +662,10 @@ def process_offers(template_buffer, uploaded_files):
     mapping_suggestions['Management fee'] = 'management_fee'
     mapping_suggestions['Tyres (summer and winter)'] = 'tyres_cost'
     mapping_suggestions['Road side assistance'] = 'roadside_assistance'
+    mapping_suggestions['Total monthly service rate'] = 'total_monthly_service_rate'
     mapping_suggestions['Total monthly lease ex. VAT'] = 'total_monthly_lease'
     mapping_suggestions['Excess kilometers'] = 'excess_mileage_rate'
     mapping_suggestions['Unused kilometers'] = 'unused_mileage_rate'
-    mapping_suggestions['Additional equipment'] = 'accessories_price'
-    mapping_suggestions['Additional equipment price'] = 'accessories_price'
 
     user_mapping = {}
     with st.sidebar.expander("📝 Field Mappings"):
@@ -753,9 +771,42 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
         # Skip the Quote number and Winner rows as they are handled separately
         if template_field in ['Quote number', 'Winner']:
             continue
+        
+        # Handle the special cases for 'Equipment' section
+        if template_field == 'Equipment':
+            # Add a blank row for spacing
+            final_report_df_rows.append([''] * (len(vendors) + 1))
+            final_report_df_rows.append(['Equipment'] + [''] * len(vendors))
+            
+            # Combine options and accessories lists
+            all_equipment = []
+            for offer in offers:
+                equipment_dict = {}
+                for item in offer.options_list + offer.accessories_list:
+                    equipment_dict[item['name']] = item.get('price', None)
+                all_equipment.append(equipment_dict)
+
+            # Get a unique, sorted list of all equipment names across all offers
+            all_equipment_names = sorted(list(set(item['name'] for offer in offers for item in offer.options_list + offer.accessories_list)))
+            
+            # Add each unique equipment item to the report
+            for equipment_name in all_equipment_names:
+                equipment_row = [equipment_name]
+                for offer_equipment in all_equipment:
+                    equipment_row.append(offer_equipment.get(equipment_name, None))
+                final_report_df_rows.append(equipment_row)
+            
+            # Add 'Total Options and Accessories' row
+            total_options_row = ['Options (excl. taxes)'] + [offer.options_price for offer in offers]
+            total_accessories_row = ['Accessories (excl. taxes)'] + [offer.accessories_price for offer in offers]
+
+            final_report_df_rows.append(total_options_row)
+            final_report_df_rows.append(total_accessories_row)
+
+            continue # Skip the rest of the loop for this field
 
         # Add a blank row if the field is a new section header
-        if template_field in ['Driver name', 'Vehicle Description', 'Investment', 'Taxation', 'Duration & Mileage', 'Financial rate', 'Service rate', 'Monthly fee', 'Excess / unused km', 'Equipment', 'Total cost']:
+        if template_field in ['Driver name', 'Vehicle Description', 'Investment', 'Taxation', 'Duration & Mileage', 'Financial rate', 'Service rate', 'Monthly fee', 'Excess / unused km', 'Total cost']:
              final_report_df_rows.append([''] * (len(vendors) + 1))
 
         # Add the field row with values from each offer
@@ -774,19 +825,17 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
                         elif template_field == 'Total monthly service rate':
                             # Sum of all service-related costs
                             val = sum([
-                                offer.get('maintenance_repair', 0),
-                                offer.get('roadside_assistance', 0),
-                                offer.get('insurance_cost', 0),
-                                offer.get('green_tax', 0),
-                                offer.get('management_fee', 0),
-                                offer.get('tyres_cost', 0)
+                                offer.get('maintenance_repair', 0) or 0,
+                                offer.get('roadside_assistance', 0) or 0,
+                                offer.get('insurance_cost', 0) or 0,
+                                offer.get('green_tax', 0) or 0,
+                                offer.get('management_fee', 0) or 0,
+                                offer.get('tyres_cost', 0) or 0
                             ])
                             if val == 0: val = None
                         elif template_field == 'Total monthly lease ex. VAT':
                             # This is already a key in the parsed offer
                             val = offer.get(llm_field_name)
-                        elif template_field == 'Additional equipment':
-                            val = 'Itemized list not available in source data.'
                         else:
                              val = offer.get(llm_field_name)
                 except (ValueError, TypeError):
@@ -799,12 +848,12 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
 
     # Calculate and add the single "Vehicle description correspondence" value and "Gap analysis"
     if len(offers) > 1:
-        row_index = final_report_df[final_report_df['Field'] == 'Additional equipment price'].index
+        row_index = final_report_df[final_report_df['Field'] == 'Accessories (excl. taxes)'].index
         if not row_index.empty:
             insert_idx = row_index[0]
             
             # Add a blank row
-            final_report_df = pd.concat([final_report_df.iloc[:insert_idx], pd.DataFrame([[''] * (len(vendors) + 1)], columns=final_report_df.columns), final_report_df.iloc[insert_idx:]], ignore_index=True)
+            final_report_df = pd.concat([final_report_df.iloc[:insert_idx + 1], pd.DataFrame([[''] * (len(vendors) + 1)], columns=final_report_df.columns), final_report_df.iloc[insert_idx + 1:]], ignore_index=True)
 
             # Then add the correspondence row
             correspondence_row = ['Vehicle description correspondence']
@@ -814,10 +863,10 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
                 score = calculate_similarity_score(reference_offer.vehicle_description, offer.vehicle_description)
                 correspondence_row.append(f"{score:.1f}%")
             
-            final_report_df = pd.concat([final_report_df.iloc[:insert_idx + 1], pd.DataFrame([correspondence_row], columns=final_report_df.columns), final_report_df.iloc[insert_idx + 1:]], ignore_index=True)
+            final_report_df = pd.concat([final_report_df.iloc[:insert_idx + 2], pd.DataFrame([correspondence_row], columns=final_report_df.columns), final_report_df.iloc[insert_idx + 2:]], ignore_index=True)
             
             # Add a blank row
-            final_report_df = pd.concat([final_report_df.iloc[:insert_idx + 2], pd.DataFrame([[''] * (len(vendors) + 1)], columns=final_report_df.columns), final_report_df.iloc[insert_idx + 2:]], ignore_index=True)
+            final_report_df = pd.concat([final_report_df.iloc[:insert_idx + 3], pd.DataFrame([[''] * (len(vendors) + 1)], columns=final_report_df.columns), final_report_df.iloc[insert_idx + 3:]], ignore_index=True)
 
             # Add Gap analysis row
             gap_analysis_row = ['Gap analysis']
@@ -826,7 +875,7 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
                 diff_text = get_offer_diff(reference_offer, offer)
                 gap_analysis_row.append(diff_text)
             
-            final_report_df = pd.concat([final_report_df.iloc[:insert_idx + 3], pd.DataFrame([gap_analysis_row], columns=final_report_df.columns), final_report_df.iloc[insert_idx + 3:]], ignore_index=True)
+            final_report_df = pd.concat([final_report_df.iloc[:insert_idx + 4], pd.DataFrame([gap_analysis_row], columns=final_report_df.columns), final_report_df.iloc[insert_idx + 4:]], ignore_index=True)
 
 
     # Add Cost Analysis Summary at the bottom
