@@ -69,8 +69,6 @@ CURRENCY_MAP = {
 class ParsedOffer:
     """Standardized structure for parsed leasing offer data"""
     filename: str
-    customer: Optional[str] = None
-    driver_name: Optional[str] = None
     vendor: Optional[str] = None
     vehicle_description: Optional[str] = None
     duration_months: Optional[int] = None
@@ -85,9 +83,9 @@ class ParsedOffer:
     currency: Optional[str] = None
     parsing_confidence: float = 0.0
     warnings: List[str] = field(default_factory=list)
-    quote_number: Optional[str] = None
     
-    # New fields
+    # New fields to support the extended functionality
+    quote_number: Optional[str] = None
     manufacturer: Optional[str] = None
     model: Optional[str] = None
     version: Optional[str] = None
@@ -113,7 +111,9 @@ class ParsedOffer:
     tyres_cost: Optional[float] = None
     roadside_assistance: Optional[float] = None
     total_monthly_lease: Optional[float] = None
-    
+    driver_name: Optional[str] = None
+    customer: Optional[str] = None
+
 def normalize_currency(currency_str: Optional[str]) -> Optional[str]:
     """Normalize currency string to a standard code."""
     if not currency_str:
@@ -165,8 +165,6 @@ class LLMParser:
                 "responseSchema": {
                     "type": "OBJECT",
                     "properties": {
-                        "customer": {"type": "STRING"},
-                        "driver_name": {"type": "STRING"},
                         "vendor": {"type": "STRING"},
                         "vehicle_description": {"type": "STRING"},
                         "duration_months": {"type": "NUMBER"},
@@ -206,13 +204,16 @@ class LLMParser:
                         "management_fee": {"type": "NUMBER"},
                         "tyres_cost": {"type": "NUMBER"},
                         "roadside_assistance": {"type": "NUMBER"},
-                        "total_monthly_lease": {"type": "NUMBER"}
+                        "total_monthly_lease": {"type": "NUMBER"},
+                        "driver_name": {"type": "STRING"},
+                        "customer": {"type": "STRING"}
                     }
                 }
             }
         }
         
         # Mocking the LLM's response for demonstration
+        # This mock data includes all fields now
         mock_responses = {
             "Kontraktoplæg_3052514001_1 (1).pdf": {
                 "customer": "Grundfos A/S",
@@ -356,31 +357,6 @@ class LLMParser:
         # Fallback for unknown files or if real API call fails
         return ParsedOffer(filename=filename, warnings=["LLM parsing failed or is not configured."], parsing_confidence=0.1)
 
-def consolidate_names(offers: List[ParsedOffer]) -> Tuple[str, str]:
-    """Consolidate customer and driver names from a list of parsed offers."""
-    common_customer = None
-    driver_name = None
-
-    # Find a common driver name
-    for offer in offers:
-        if offer.driver_name:
-            driver_name = offer.driver_name
-            break
-
-    # Find a common customer name
-    customer_names = [o.customer for o in offers if o.customer]
-    if customer_names:
-        # Simple consolidation: find the shortest common starting string
-        first_name = customer_names[0].split()[0]
-        if all(name.startswith(first_name) for name in customer_names):
-            common_customer = first_name
-        else:
-            # If no simple match, use the first customer name found
-            common_customer = customer_names[0]
-            
-    return common_customer, driver_name
-
-
 class OfferComparator:
     """Handles comparison and analysis of multiple offers"""
     
@@ -482,6 +458,31 @@ def main():
         else:
             st.warning("⚠️ Please upload at least one other PDF file for comparison")
 
+def create_demo_data():
+    """Create dummy files for demonstration purposes."""
+    st.info("Loading demo data...")
+    # These mock files contain the text content from the PDFs the user provided
+    demo_offers = [
+        ("Kontraktoplæg_3052514001_1 (1).pdf", "Kontraktoplæg 3052514/001 ... Periode (mdr.): 48 ... Kilometer pr. år: 35.000 ... Leasinggiver: Ayvens ..."),
+        ("quotation  2508.120.036 (1).pdf", "ARVAL ... quotation: 2508.120.03610/ ... contract annual kilometres/term (month): 35.000/48 ... price per month excl. VAT: 5.576,79 ...")
+    ]
+    uploaded_files = []
+    for filename, content in demo_offers:
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            tmp.write(content.encode('utf-8'))
+            tmp_path = tmp.name
+        
+        uploaded_file = st.runtime.uploaded_file_manager.UploadedFile(
+            name=filename,
+            type="application/pdf",
+            path=tmp_path,
+            size=len(content.encode('utf-8'))
+        )
+        uploaded_files.append(uploaded_file)
+        
+    st.success("Demo data loaded! Please click the 'Compare Offers' button to proceed.")
+    return uploaded_files
+
 def create_default_template() -> io.BytesIO:
     """Create a default Excel template file for demonstration."""
     template_data = {
@@ -498,10 +499,10 @@ def create_default_template() -> io.BytesIO:
             'Service rate', 'Maintenance & repair', 'Electricity cost*', 'EV charging station at home*', 'Road side assistance', 'Insurance', 'Green tax*', 'Management fee', 'Tyres (summer and winter)', 'Total monthly service rate',
             'Monthly fee', 'Total monthly lease ex. VAT',
             'Excess / unused km', 'Excess kilometers', 'Unused kilometers',
-            'Equipment', 'Additional equipment',
+            'Equipment', 'Additional equipment price',
             'Total cost', 'Winner'
         ],
-        'Value': [None] * 46
+        'Value': [None] * 45
     }
     df = pd.DataFrame(template_data)
     buffer = io.BytesIO()
@@ -646,7 +647,8 @@ def process_offers(template_buffer, uploaded_files):
     mapping_suggestions['Excess kilometers'] = 'excess_mileage_rate'
     mapping_suggestions['Unused kilometers'] = 'unused_mileage_rate'
     mapping_suggestions['Additional equipment'] = 'accessories_price'
-    
+    mapping_suggestions['Additional equipment price'] = 'accessories_price'
+
     user_mapping = {}
     with st.sidebar.expander("📝 Field Mappings"):
         for template_field, suggested_llm_field in mapping_suggestions.items():
@@ -684,6 +686,30 @@ def process_offers(template_buffer, uploaded_files):
         except Exception as e:
             st.error(f"❌ Error generating Excel report: {str(e)}")
             logger.error(f"Excel generation error: {e}\n{traceback.format_exc()}")
+
+def consolidate_names(offers: List[ParsedOffer]) -> Tuple[str, str]:
+    """Consolidate customer and driver names from a list of parsed offers."""
+    common_customer = None
+    driver_name = None
+
+    # Find a common driver name
+    for offer in offers:
+        if offer.driver_name:
+            driver_name = offer.driver_name
+            break
+
+    # Find a common customer name
+    customer_names = [o.customer for o in offers if o.customer]
+    if customer_names:
+        # Simple consolidation: find the shortest common starting string
+        first_name = customer_names[0].split()[0]
+        if all(name.startswith(first_name) for name in customer_names):
+            common_customer = first_name
+        else:
+            # If no simple match, use the first customer name found
+            common_customer = customer_names[0]
+            
+    return common_customer, driver_name
 
 def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO, user_mapping: Dict[str, str]) -> io.BytesIO:
     """Generate Excel report based on the provided template and parsed offers."""
@@ -759,6 +785,8 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
                         elif template_field == 'Total monthly lease ex. VAT':
                             # This is already a key in the parsed offer
                             val = offer.get(llm_field_name)
+                        elif template_field == 'Additional equipment':
+                            val = 'Itemized list not available in source data.'
                         else:
                              val = offer.get(llm_field_name)
                 except (ValueError, TypeError):
@@ -771,13 +799,13 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
 
     # Calculate and add the single "Vehicle description correspondence" value and "Gap analysis"
     if len(offers) > 1:
-        row_index = final_report_df[final_report_df['Field'] == 'Additional equipment'].index
+        row_index = final_report_df[final_report_df['Field'] == 'Additional equipment price'].index
         if not row_index.empty:
-            insert_idx = row_index[0] + 1
+            insert_idx = row_index[0]
             
-            # Add a blank row first
+            # Add a blank row
             final_report_df = pd.concat([final_report_df.iloc[:insert_idx], pd.DataFrame([[''] * (len(vendors) + 1)], columns=final_report_df.columns), final_report_df.iloc[insert_idx:]], ignore_index=True)
-            
+
             # Then add the correspondence row
             correspondence_row = ['Vehicle description correspondence']
             correspondence_row.append('100.0%') # Reference offer is always 100%
@@ -851,7 +879,7 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
                 worksheet.write(row_idx, 0, row[0], bold_format)
                 for col_idx in range(1, len(row)):
                     worksheet.write(row_idx, col_idx, row[col_idx], bold_and_colored_format)
-
+            
             # Highlight winner and corresponding monthly cost
             if '🥇 Winner' in row:
                 winner_col_idx = list(row).index('🥇 Winner')
@@ -874,11 +902,11 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
                 worksheet.write(vendor_row_idx, winner_col_idx, winning_vendor, bold_and_colored_format)
                 worksheet.write(total_cost_row_idx, winner_col_idx, winning_total_cost, bold_and_colored_format)
                 
-            # Apply wrap text format to 'Gap analysis' row
-            if row[0] == 'Gap analysis':
-                gap_analysis_row_idx = final_report_df[final_report_df['Field'] == 'Gap analysis'].index[0]
+            # Apply wrap text format to 'Gap analysis' and 'Additional equipment' rows
+            if row[0] in ['Gap analysis', 'Additional equipment']:
+                target_row_idx = final_report_df[final_report_df['Field'] == row[0]].index[0]
                 for col_idx in range(1, len(row)):
-                    worksheet.write(gap_analysis_row_idx, col_idx, final_report_df.iloc[gap_analysis_row_idx, col_idx], wrap_format)
+                    worksheet.write(target_row_idx, col_idx, final_report_df.iloc[target_row_idx, col_idx], wrap_format)
 
         # Fix column widths to prevent the wrapped text from making them too wide
         for i, col in enumerate(final_report_df.columns):
