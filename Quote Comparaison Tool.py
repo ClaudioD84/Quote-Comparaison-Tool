@@ -383,7 +383,7 @@ def process_offers(template_buffer, uploaded_files):
             first_offer = offers[0]
             customer_name = first_offer.customer if first_offer.customer else "Customer"
             driver_name = first_offer.driver_name if first_offer.driver_name else "Driver"
-            file_name = f"{customer_name}_{driver_name}"
+            file_name = f"{customer_name}_{driver_name}".replace(" ", "_")
 
             st.download_button(
                 label="⬇️ Download Excel Report",
