@@ -499,10 +499,10 @@ def create_default_template() -> io.BytesIO:
             'Service rate', 'Maintenance & repair', 'Electricity cost*', 'EV charging station at home*', 'Road side assistance', 'Insurance', 'Green tax*', 'Management fee', 'Tyres (summer and winter)', 'Total monthly service rate',
             'Monthly fee', 'Total monthly lease ex. VAT',
             'Excess / unused km', 'Excess kilometers', 'Unused kilometers',
-            'Equipment', 'Additional equipment price',
+            'Equipment', 'Additional equipment', 'Additional equipment price',
             'Total cost', 'Winner'
         ],
-        'Value': [None] * 45
+        'Value': [None] * 46
     }
     df = pd.DataFrame(template_data)
     buffer = io.BytesIO()
