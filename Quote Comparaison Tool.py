@@ -1,15 +1,3 @@
-"""
-AI-Powered Fleet Leasing Offer Comparator - Streamlit App
-This version uses a Large Language Model (LLM) to intelligently parse PDF content.
-Author: Fleet Management Tool
-Requirements:
-  streamlit, pandas, numpy, pdfplumber, python-dateutil, xlsxwriter
-Notes:
-  - This version uses a mock API call to demonstrate the LLM functionality.
-  - You can replace the mock logic with a real API call to a service like Gemini.
-  - The LLM can handle various languages and formats without needing specific regex rules.
-"""
-
 import io
 import re
 import sys
@@ -23,16 +11,13 @@ from datetime import datetime, date
 import requests
 import difflib
 from collections import defaultdict
+import xlsxwriter
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 import pdfplumber
 from dateutil import parser as dateparser
-from openpyxl import Workbook
-from openpyxl.utils.dataframe import dataframe_to_rows
-from openpyxl.styles import Font
-import xlsxwriter
 
 # Configure logging
 @st.cache_resource
@@ -48,22 +33,6 @@ def setup_logging():
     return logger
 
 logger = setup_logging()
-
-# Currency mapping dictionary for European currencies
-CURRENCY_MAP = {
-    'kr.': 'DKK',
-    'dkk': 'DKK',
-    '€': 'EUR',
-    'eur': 'EUR',
-    '£': 'GBP',
-    'gbp': 'GBP',
-    'chf': 'CHF',
-    'sek': 'SEK',
-    'nok': 'NOK',
-    'pln': 'PLN',
-    'huf': 'HUF',
-    'czk': 'CZK',
-}
 
 @dataclass
 class ParsedOffer:
@@ -113,15 +82,11 @@ class ParsedOffer:
     total_monthly_lease: Optional[float] = None
     driver_name: Optional[str] = None
     customer: Optional[str] = None
+    
     # New fields for itemized lists
     options_list: List[Dict[str, Union[str, float]]] = field(default_factory=list)
     accessories_list: List[Dict[str, Union[str, float]]] = field(default_factory=list)
 
-def normalize_currency(currency_str: Optional[str]) -> Optional[str]:
-    """Normalize currency string to a standard code."""
-    if not currency_str:
-        return None
-    return CURRENCY_MAP.get(currency_str.lower(), currency_str)
 
 class TextProcessor:
     """Handles text extraction and normalization"""
@@ -178,7 +143,6 @@ class LLMParser:
                         "admin_fees": {"type": "NUMBER"},
                         "maintenance_included": {"type": "BOOLEAN"},
                         "excess_mileage_rate": {"type": "NUMBER"},
-                        "unused_mileage_rate": {"type": "NUMBER"},
                         "currency": {"type": "STRING"},
                         "parsing_confidence": {"type": "NUMBER"},
                         "warnings": {"type": "ARRAY", "items": {"type": "STRING"}},
@@ -218,7 +182,6 @@ class LLMParser:
         }
         
         # Mocking the LLM's response for demonstration
-        # This mock data includes all fields now
         mock_responses = {
             "Kontraktoplæg_3052514001_1 (1).pdf": {
                 "customer": "Grundfos A/S",
@@ -233,7 +196,7 @@ class LLMParser:
                 "admin_fees": None,
                 "maintenance_included": True,
                 "excess_mileage_rate": 0.50,
-                "currency": "kr.",
+                "currency": "DKK",
                 "parsing_confidence": 0.95,
                 "warnings": ["Total mileage calculated from annual mileage"],
                 "quote_number": "3052514/001",
@@ -318,52 +281,6 @@ class LLMParser:
                     {"name": "Pre-equipment", "price": 6000.00},
                     {"name": "Winter tyres", "price": 9700.00}
                 ]
-            },
-            "quotation_6351624001_Georges__Jean-Francois.pdf": {
-                "customer": "Philips Belgium Commercial SA/NV",
-                "driver_name": "Jean-Francois Georges",
-                "vendor": "Aayvens",
-                "vehicle_description": "SKODA ELROQ BEV 82KWH 85 CORPORATE",
-                "duration_months": 60,
-                "total_mileage": 175000,
-                "monthly_rental": 666.47,
-                "upfront_costs": 0,
-                "deposit": 0,
-                "admin_fees": None,
-                "maintenance_included": True,
-                "excess_mileage_rate": None,
-                "unused_mileage_rate": None,
-                "currency": "€",
-                "parsing_confidence": 0.90,
-                "warnings": ["Could not parse specific financial breakdown"],
-                "quote_number": "6351624/001",
-                "manufacturer": "Skoda",
-                "model": "Elroq",
-                "version": "BEV 82KWH 85 CORPORATE",
-                "jato_code": None,
-                "fuel_type": "Electric",
-                "num_doors": 5,
-                "hp": 286,
-                "c02_emission": None,
-                "battery_range": None,
-                "vehicle_price": 39991.74,
-                "options_price": 3120.07,
-                "accessories_price": None,
-                "delivery_cost": 326.45,
-                "registration_tax": None,
-                "total_net_investment": 37113.05,
-                "taxation_value": None,
-                "financial_rate": None,
-                "depreciation_interest": None,
-                "maintenance_repair": None,
-                "insurance_cost": None,
-                "green_tax": None,
-                "management_fee": None,
-                "tyres_cost": None,
-                "roadside_assistance": None,
-                "total_monthly_lease": 666.47,
-                "options_list": [{"name": "Loft interior design", "price": 3120.07}],
-                "accessories_list": []
             }
         }
         
@@ -389,11 +306,6 @@ class OfferComparator:
         if len(self.offers) < 2:
             errors.append("Need at least 2 offers for comparison")
             return False, errors
-            
-        normalized_currencies = [normalize_currency(o.currency) for o in self.offers if o.currency]
-        if len(set(normalized_currencies)) > 1:
-            errors.append(f"Mixed currencies detected: {set(normalized_currencies)}")
-
         durations = [o.duration_months for o in self.offers if o.duration_months]
         mileages = [o.total_mileage for o in self.offers if o.total_mileage]
         if len(durations) != len(self.offers) or None in durations:
@@ -404,7 +316,9 @@ class OfferComparator:
             errors.append("Some offers are missing mileage information.")
         elif len(set(mileages)) > 1:
             errors.append(f"Contract mileages don't match: {set(mileages)}")
-        
+        currencies = [o.currency for o in self.offers if o.currency]
+        if len(set(currencies)) > 1:
+            errors.append(f"Mixed currencies detected: {set(currencies)}")
         return len(errors) == 0, errors
     
     def calculate_total_costs(self) -> List[Dict[str, Any]]:
@@ -454,28 +368,22 @@ def main():
     
     # File upload
     st.header("📁 Upload Offers")
-    
-    reference_file = st.file_uploader(
-        "Upload the Reference Offer (1 file)",
-        type=['pdf'],
-        accept_multiple_files=False,
-        help="Upload the PDF file that will be used as the benchmark for comparison"
-    )
-    
-    other_files = st.file_uploader(
-        "Upload Other Offers (1-9 files)",
+    uploaded_files = st.file_uploader(
+        "Upload PDF leasing offers (2-10 files)",
         type=['pdf'],
         accept_multiple_files=True,
-        help="Upload the other PDF files you want to compare against the reference offer"
+        help="Upload PDF files containing leasing offers for the same vehicle"
     )
 
-    if reference_file and other_files:
-        if len(other_files) >= 1:
-            uploaded_files = [reference_file] + other_files
+    if st.button("🎯 Load Demo Data", help="Load sample data for testing"):
+        uploaded_files = create_demo_data()
+
+    if uploaded_files:
+        if len(uploaded_files) >= 2:
             template_buffer = create_default_template()
             process_offers(template_buffer, uploaded_files)
         else:
-            st.warning("⚠️ Please upload at least one other PDF file for comparison")
+            st.warning("⚠️ Please upload at least 2 PDF files for comparison")
 
 def create_demo_data():
     """Create dummy files for demonstration purposes."""
@@ -508,20 +416,17 @@ def create_default_template() -> io.BytesIO:
         'Field': [
             'Quote number', 'Driver name', 'Vehicle Description', 'Manufacturer', 'Model',
             'Version', 'JATO code', 'Fuel type', 'No. doors', 'Number of gears', 'HP',
-            'C02 emission WLTP (g/km)', 'Battery range',
-            'Investment', 'Vehicle list price (excl. VAT, excl. options)', 'Options (excl. taxes)',
-            'Accessories (excl. taxes)', 'Delivery cost', 'Registration tax',
-            'Total net investment',
-            'Taxation', 'Taxation value',
-            'Duration & Mileage', 'Term (months)', 'Mileage per year (in km)',
-            'Financial rate', 'Monthly financial rate (depreciation + interest)',
-            'Service rate', 'Maintenance & repair', 'Electricity cost*', 'EV charging station at home*', 'Road side assistance', 'Insurance', 'Green tax*', 'Management fee', 'Tyres (summer and winter)', 'Total monthly service rate',
-            'Monthly fee', 'Total monthly lease ex. VAT',
-            'Excess / unused km', 'Excess kilometers', 'Unused kilometers',
-            'Equipment', 'Additional equipment', 'Additional equipment price',
-            'Total cost', 'Winner'
+            'C02 emission WLTP (g/km)', 'Battery range', 'Investment',
+            'Vehicle list price (excl. VAT, excl. options)',
+            'Delivery cost', 'Registration tax',
+            'Total net investment', 'Taxation', 'Taxation value', 'Duration & Mileage',
+            'Term (months)', 'Mileage per year (in km)', 'Financial rate',
+            'Monthly financial rate (depreciation + interest)', 'Other fixed cost',
+            'Maintenance, repairs and tires', 'Insurance', 'Administration fee',
+            'Fixed costs', 'Leasing payment', 'Excess costs', 'Total cost', 'Winner',
+            'Additional equipment'
         ],
-        'Value': [None] * 47
+        'Value': [None] * 34
     }
     df = pd.DataFrame(template_data)
     buffer = io.BytesIO()
@@ -547,53 +452,6 @@ def calculate_similarity_score(s1: str, s2: str) -> float:
     
     matcher = difflib.SequenceMatcher(None, s1_preprocessed, s2_preprocessed)
     return matcher.ratio() * 100
-
-def get_offer_diff(offer1: ParsedOffer, offer2: ParsedOffer) -> str:
-    """Compares two ParsedOffer objects and returns a string summarizing the differences."""
-    diff_summary = []
-    
-    # List of key fields to compare, excluding the ones to ignore
-    fields_to_compare = [
-        'vehicle_description', 'manufacturer', 'model', 'version',
-        'duration_months', 'total_mileage',
-        'currency', 'total_net_investment', 'taxation_value', 'green_tax',
-        'fuel_type',
-    ]
-
-    for field in fields_to_compare:
-        val1 = getattr(offer1, field)
-        val2 = getattr(offer2, field)
-        
-        # Special handling for specific fields
-        if field == 'currency':
-            if normalize_currency(val1) == normalize_currency(val2):
-                continue
-        elif field == 'fuel_type':
-            val1_lower = str(val1).lower() if val1 else None
-            val2_lower = str(val2).lower() if val2 else None
-            if (val1_lower in ['bev', 'electric'] and val2_lower in ['bev', 'electric']) or (val1 == val2):
-                continue
-        
-        # Format values for display
-        if isinstance(val1, float) or isinstance(val2, float):
-            val1_str = f"{val1:,.2f}" if val1 is not None else "N/A"
-            val2_str = f"{val2:,.2f}" if val2 is not None else "N/A"
-        else:
-            val1_str = str(val1) if val1 is not None else "N/A"
-            val2_str = str(val2) if val2 is not None else "N/A"
-            
-        if val1_str.lower() == val2_str.lower():
-            continue
-
-        if val1 is None and val2 is not None:
-            diff_summary.append(f"• {field}: Not in reference vs {val2_str}")
-        elif val1 is not None and val2 is None:
-            diff_summary.append(f"• {field}: {val1_str} vs Not in offer")
-        else:
-            diff_summary.append(f"• {field}: {val1_str} vs {val2_str}")
-
-    return "\n".join(diff_summary) if diff_summary else "No significant differences found."
-
 
 def process_offers(template_buffer, uploaded_files):
     """Process uploaded offers and generate comparison"""
@@ -621,7 +479,7 @@ def process_offers(template_buffer, uploaded_files):
     if not offers or not any(o.parsing_confidence > 0 for o in offers):
         st.error("❌ No offers could be processed successfully. Please check the file format.")
         return
-        
+    
     display_parsing_results(offers)
     
     # User-editable mapping section
@@ -632,41 +490,16 @@ def process_offers(template_buffer, uploaded_files):
     mapping_suggestions = defaultdict(str)
     
     # These are hardcoded for now, but in a real app would be dynamic
-    mapping_suggestions['Quote number'] = 'quote_number'
-    mapping_suggestions['Driver name'] = 'driver_name'
-    mapping_suggestions['Vehicle Description'] = 'vehicle_description'
-    mapping_suggestions['Manufacturer'] = 'manufacturer'
-    mapping_suggestions['Model'] = 'model'
-    mapping_suggestions['Version'] = 'version'
-    mapping_suggestions['JATO code'] = 'jato_code'
-    mapping_suggestions['Fuel type'] = 'fuel_type'
-    mapping_suggestions['No. doors'] = 'num_doors'
-    mapping_suggestions['HP'] = 'hp'
-    mapping_suggestions['C02 emission WLTP (g/km)'] = 'c02_emission'
-    mapping_suggestions['Battery range'] = 'battery_range'
-    mapping_suggestions['Vehicle list price (excl. VAT, excl. options)'] = 'vehicle_price'
-    mapping_suggestions['Options (excl. taxes)'] = 'options_price'
-    mapping_suggestions['Accessories (excl. taxes)'] = 'accessories_price'
-    mapping_suggestions['Delivery cost'] = 'delivery_cost'
-    mapping_suggestions['Registration tax'] = 'registration_tax'
-    mapping_suggestions['Total net investment'] = 'total_net_investment'
-    mapping_suggestions['Taxation'] = 'taxation'
-    mapping_suggestions['Taxation value'] = 'taxation_value'
+    mapping_suggestions['Manufacturer'] = 'vehicle_description'
+    mapping_suggestions['Model'] = 'vehicle_description'
+    mapping_suggestions['Version'] = 'vehicle_description'
+    mapping_suggestions['Fuel type'] = 'vehicle_description'
     mapping_suggestions['Term (months)'] = 'duration_months'
     mapping_suggestions['Mileage per year (in km)'] = 'total_mileage'
-    mapping_suggestions['Financial rate'] = 'financial_rate'
-    mapping_suggestions['Monthly financial rate (depreciation + interest)'] = 'depreciation_interest'
-    mapping_suggestions['Maintenance & repair'] = 'maintenance_repair'
-    mapping_suggestions['Insurance'] = 'insurance_cost'
-    mapping_suggestions['Green tax*'] = 'green_tax'
-    mapping_suggestions['Management fee'] = 'management_fee'
-    mapping_suggestions['Tyres (summer and winter)'] = 'tyres_cost'
-    mapping_suggestions['Road side assistance'] = 'roadside_assistance'
-    mapping_suggestions['Total monthly service rate'] = 'total_monthly_service_rate'
-    mapping_suggestions['Total monthly lease ex. VAT'] = 'total_monthly_lease'
-    mapping_suggestions['Excess kilometers'] = 'excess_mileage_rate'
-    mapping_suggestions['Unused kilometers'] = 'unused_mileage_rate'
-
+    mapping_suggestions['Total TCO'] = 'total_contract_cost'
+    mapping_suggestions['Monthly TCO'] = 'monthly_rental'
+    mapping_suggestions['Additional equipment'] = 'options_list' # New mapping suggestion
+    
     user_mapping = {}
     with st.sidebar.expander("📝 Field Mappings"):
         for template_field, suggested_llm_field in mapping_suggestions.items():
@@ -688,13 +521,7 @@ def process_offers(template_buffer, uploaded_files):
         
         try:
             excel_buffer = generate_excel_report(offers, template_buffer, user_mapping)
-            
-            # Use consolidated customer and driver names for file naming only
-            common_customer, common_driver = consolidate_names(offers)
-            customer_name = common_customer if common_customer else "Customer"
-            driver_name = common_driver if common_driver else "Driver"
-            file_name = f"{customer_name}_{driver_name}".replace(" ", "_")
-
+            file_name = "Grundfos_Lars Østergaard"
             st.download_button(
                 label="⬇️ Download Excel Report",
                 data=excel_buffer,
@@ -705,30 +532,6 @@ def process_offers(template_buffer, uploaded_files):
             st.error(f"❌ Error generating Excel report: {str(e)}")
             logger.error(f"Excel generation error: {e}\n{traceback.format_exc()}")
 
-def consolidate_names(offers: List[ParsedOffer]) -> Tuple[str, str]:
-    """Consolidate customer and driver names from a list of parsed offers."""
-    common_customer = None
-    driver_name = None
-
-    # Find a common driver name
-    for offer in offers:
-        if offer.driver_name:
-            driver_name = offer.driver_name
-            break
-
-    # Find a common customer name
-    customer_names = [o.customer for o in offers if o.customer]
-    if customer_names:
-        # Simple consolidation: find the shortest common starting string
-        first_name = customer_names[0].split()[0]
-        if all(name.startswith(first_name) for name in customer_names):
-            common_customer = first_name
-        else:
-            # If no simple match, use the first customer name found
-            common_customer = customer_names[0]
-            
-    return common_customer, driver_name
-
 def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO, user_mapping: Dict[str, str]) -> io.BytesIO:
     """Generate Excel report based on the provided template and parsed offers."""
     
@@ -738,235 +541,92 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
     except Exception as e:
         raise ValueError(f"Failed to read Excel template. Error: {e}")
 
-    # Process offers and add their data to the report
-    offer_data_list = []
+    # Create a new DataFrame from the parsed offers for easy manipulation
+    offer_data_for_df = []
     for offer in offers:
         offer_dict = asdict(offer)
         upfront_costs = (offer.upfront_costs or 0) + (offer.deposit or 0) + (offer.admin_fees or 0)
         offer_dict['total_contract_cost'] = (offer.monthly_rental * offer.duration_months) + upfront_costs if offer.monthly_rental and offer.duration_months else None
-        offer_data_list.append(offer_dict)
+        offer_data_for_df.append(offer_dict)
     
-    offers_df = pd.DataFrame(offer_data_list)
-    reference_offer = offers[0]
-    other_offers = offers[1:]
-
-    # Get the list of vendors to use as column headers
-    vendors = [offer.get('vendor', 'Unknown Vendor') for offer in offer_data_list]
+    offers_df = pd.DataFrame(offer_data_for_df)
     
-    # Initialize the list of rows for the final DataFrame
-    final_report_df_rows = []
+    # Create the final DataFrame for the report
+    report_df = template_df.copy()
     
-    # First row: "Leasing company" and vendor names
-    leasing_company_row = ['Leasing company'] + vendors
-    final_report_df_rows.append(leasing_company_row)
-
-    # Second row: "Quote number" and quote numbers
-    quote_number_row = ['Quote number'] + [v.get('quote_number') for v in offer_data_list]
-    final_report_df_rows.append(quote_number_row)
-
-    # Rebuild the rest of the report based on the template fields
-    for index, row in template_df.iterrows():
-        template_field = row['Field']
+    # Add columns for each vendor and populate them
+    for _, offer in offers_df.iterrows():
+        vendor_name = offer['vendor'] or "Unknown Vendor"
         
-        # Skip the Quote number and Winner rows as they are handled separately
-        if template_field in ['Quote number', 'Winner']:
-            continue
+        # Add new column and get the column's index
+        report_df[vendor_name] = ""
+        vendor_col_index = len(report_df.columns) - 1
         
-        # Handle the special cases for 'Equipment' section
-        if template_field == 'Equipment':
-            # Add a blank row for spacing
-            final_report_df_rows.append([''] * (len(vendors) + 1))
-            final_report_df_rows.append(['Equipment'] + [''] * len(vendors))
-            
-            # Combine options and accessories lists
-            all_equipment = []
-            for offer in offers:
-                equipment_dict = {}
-                for item in offer.options_list + offer.accessories_list:
-                    equipment_dict[item['name']] = item.get('price', None)
-                all_equipment.append(equipment_dict)
-
-            # Get a unique, sorted list of all equipment names across all offers
-            all_equipment_names = sorted(list(set(item['name'] for offer in offers for item in offer.options_list + offer.accessories_list)))
-            
-            # Add each unique equipment item to the report
-            for equipment_name in all_equipment_names:
-                equipment_row = [equipment_name]
-                for offer_equipment in all_equipment:
-                    equipment_row.append(offer_equipment.get(equipment_name, None))
-                final_report_df_rows.append(equipment_row)
-            
-            # Add 'Total Options and Accessories' row
-            total_options_row = ['Options (excl. taxes)'] + [offer.options_price for offer in offers]
-            total_accessories_row = ['Accessories (excl. taxes)'] + [offer.accessories_price for offer in offers]
-
-            final_report_df_rows.append(total_options_row)
-            final_report_df_rows.append(total_accessories_row)
-
-            continue # Skip the rest of the loop for this field
-
-        # Add a blank row if the field is a new section header
-        if template_field in ['Driver name', 'Vehicle Description', 'Investment', 'Taxation', 'Duration & Mileage', 'Financial rate', 'Service rate', 'Monthly fee', 'Excess / unused km', 'Total cost']:
-             final_report_df_rows.append([''] * (len(vendors) + 1))
-
-        # Add the field row with values from each offer
-        new_row = [template_field]
-        for offer in offer_data_list:
+        # Populate data based on the template's structure using the user mapping
+        for index, row in report_df.iterrows():
+            template_field = row.iloc[0] # Assumes the first column has the labels
             llm_field_name = user_mapping.get(template_field)
             val = None
-            if llm_field_name:
-                try:
-                    if llm_field_name in offer:
-                        if template_field == 'Mileage per year (in km)':
-                            if offer.get('duration_months') and offer.get('total_mileage'):
-                                val = int(offer.get('total_mileage') / (offer.get('duration_months') / 12))
-                            else:
-                                val = None
-                        elif template_field == 'Total monthly service rate':
-                            # Sum of all service-related costs
-                            val = sum([
-                                offer.get('maintenance_repair', 0) or 0,
-                                offer.get('roadside_assistance', 0) or 0,
-                                offer.get('insurance_cost', 0) or 0,
-                                offer.get('green_tax', 0) or 0,
-                                offer.get('management_fee', 0) or 0,
-                                offer.get('tyres_cost', 0) or 0
-                            ])
-                            if val == 0: val = None
-                        elif template_field == 'Total monthly lease ex. VAT':
-                            # This is already a key in the parsed offer
-                            val = offer.get(llm_field_name)
-                        else:
-                             val = offer.get(llm_field_name)
-                except (ValueError, TypeError):
-                    val = "N/A"
-            new_row.append(val)
-        final_report_df_rows.append(new_row)
-
-    # Create the DataFrame from the collected rows
-    final_report_df = pd.DataFrame(final_report_df_rows, columns=['Field'] + vendors)
-
-    # Calculate and add the single "Vehicle description correspondence" value and "Gap analysis"
-    if len(offers) > 1:
-        row_index = final_report_df[final_report_df['Field'] == 'Accessories (excl. taxes)'].index
-        if not row_index.empty:
-            insert_idx = row_index[0]
             
-            # Add a blank row
-            final_report_df = pd.concat([final_report_df.iloc[:insert_idx + 1], pd.DataFrame([[''] * (len(vendors) + 1)], columns=final_report_df.columns), final_report_df.iloc[insert_idx + 1:]], ignore_index=True)
+            # Special handling for composite fields and calculations
+            if template_field == 'Manufacturer':
+                val = str(offer.get(llm_field_name, "")).split()[0] if offer.get(llm_field_name) else None
+            elif template_field == 'Model':
+                val = " ".join(str(offer.get(llm_field_name, "")).split()[1:]) if offer.get(llm_field_name) else None
+            elif template_field == 'Fuel type':
+                val = 'EV' if 'el' in str(offer.get(llm_field_name, "")).lower() else None
+            elif template_field == 'Mileage per year (in km)':
+                val = offer.get(llm_field_name, 0) / (offer.get('duration_months', 12) / 12) if offer.get(llm_field_name) else None
+            elif template_field == 'Additional equipment':
+                all_equipment_names = [item['name'] for item in offer.get('options_list', []) + offer.get('accessories_list', [])]
+                val = ", ".join(all_equipment_names) if all_equipment_names else None
+            elif llm_field_name and llm_field_name in offer:
+                val = offer.get(llm_field_name)
+            
+            report_df.iloc[index, vendor_col_index] = val
 
-            # Then add the correspondence row
-            correspondence_row = ['Vehicle description correspondence']
-            correspondence_row.append('100.0%') # Reference offer is always 100%
-            
-            for i, offer in enumerate(other_offers):
-                score = calculate_similarity_score(reference_offer.vehicle_description, offer.vehicle_description)
-                correspondence_row.append(f"{score:.1f}%")
-            
-            final_report_df = pd.concat([final_report_df.iloc[:insert_idx + 2], pd.DataFrame([correspondence_row], columns=final_report_df.columns), final_report_df.iloc[insert_idx + 2:]], ignore_index=True)
-            
-            # Add a blank row
-            final_report_df = pd.concat([final_report_df.iloc[:insert_idx + 3], pd.DataFrame([[''] * (len(vendors) + 1)], columns=final_report_df.columns), final_report_df.iloc[insert_idx + 3:]], ignore_index=True)
-
-            # Add Gap analysis row
-            gap_analysis_row = ['Gap analysis']
-            gap_analysis_row.append('N/A')
-            for offer in other_offers:
-                diff_text = get_offer_diff(reference_offer, offer)
-                gap_analysis_row.append(diff_text)
-            
-            final_report_df = pd.concat([final_report_df.iloc[:insert_idx + 4], pd.DataFrame([gap_analysis_row], columns=final_report_df.columns), final_report_df.iloc[insert_idx + 4:]], ignore_index=True)
-
+    # Vehicle Description Correspondence calculation
+    if not offers_df.empty and len(offers_df) > 1:
+        base_desc = offers_df.loc[0, 'vehicle_description'] or ""
+        
+        # Add the 'Correspondence (%)' row dynamically
+        new_row_idx = len(report_df)
+        report_df.loc[new_row_idx, 'Field'] = 'Vehicle description correspondence'
+        report_df.loc[new_row_idx, 'Value'] = '100.0%'
+        
+        for idx, offer in offers_df.iterrows():
+            if idx > 0:
+                desc_to_compare = offer.get('vehicle_description', "")
+                similarity = calculate_similarity_score(base_desc, desc_to_compare)
+                # Find the correct column for the vendor
+                vendor_col = offer.get('vendor', "Unknown Vendor")
+                if vendor_col in report_df.columns:
+                    report_df.loc[new_row_idx, vendor_col] = f"{similarity:.1f}%"
 
     # Add Cost Analysis Summary at the bottom
-    final_report_df.loc[len(final_report_df)] = [''] * len(final_report_df.columns)
-    final_report_df.loc[len(final_report_df)] = ['Cost Analysis'] + [''] * (len(final_report_df.columns) - 1)
-    
     cost_data = OfferComparator(offers, {}).calculate_total_costs()
     sorted_offers = pd.DataFrame(cost_data).sort_values('total_contract_cost')
     
-    # Add vendor, total cost, and monthly cost rows
-    vendor_row = ['Vendor'] + [row['vendor'] for _, row in sorted_offers.iterrows()]
-    total_cost_row = ['Total Cost'] + [f"{row['total_contract_cost']:,.2f}" for _, row in sorted_offers.iterrows()]
-    monthly_cost_row = ['Monthly Cost'] + [f"{row['cost_per_month']:,.2f}" for _, row in sorted_offers.iterrows()]
-    winner_row = ['Winner'] + ["🥇 Winner" if index == sorted_offers.index[0] else "" for index, _ in sorted_offers.iterrows()]
+    new_rows = pd.DataFrame([[''] * len(report_df.columns)], columns=report_df.columns)
+    report_df = pd.concat([report_df, new_rows], ignore_index=True)
+    
+    cost_analysis_row = ['Cost Analysis'] + [''] * (len(report_df.columns) - 1)
+    new_rows = pd.DataFrame([cost_analysis_row], columns=report_df.columns)
+    report_df = pd.concat([report_df, new_rows], ignore_index=True)
 
-    # Pad all rows to ensure they have the same length as the DataFrame columns
-    num_cols = len(final_report_df.columns)
-    vendor_row += [''] * (num_cols - len(vendor_row))
-    total_cost_row += [''] * (num_cols - len(total_cost_row))
-    monthly_cost_row += [''] * (num_cols - len(monthly_cost_row))
-    winner_row += [''] * (num_cols - len(winner_row))
+    vendor_row = ['Vendor'] + [row['vendor'] for _, row in sorted_offers.iterrows()] + [''] * (len(report_df.columns) - len(sorted_offers) -1)
+    total_cost_row = ['Total Cost'] + [f"{row['total_contract_cost']:,.2f}" for _, row in sorted_offers.iterrows()] + [''] * (len(report_df.columns) - len(sorted_offers) -1)
+    monthly_cost_row = ['Monthly Cost'] + [f"{row['cost_per_month']:,.2f}" for _, row in sorted_offers.iterrows()] + [''] * (len(report_df.columns) - len(sorted_offers) -1)
+    winner_row = ['Winner'] + ["🥇 Winner" if index == sorted_offers.index[0] else "" for index, _ in sorted_offers.iterrows()] + [''] * (len(report_df.columns) - len(sorted_offers) -1)
 
-    final_report_df = pd.concat([
-        final_report_df,
-        pd.DataFrame([vendor_row], columns=final_report_df.columns),
-        pd.DataFrame([total_cost_row], columns=final_report_df.columns),
-        pd.DataFrame([monthly_cost_row], columns=final_report_df.columns),
-        pd.DataFrame([winner_row], columns=final_report_df.columns)
-    ], ignore_index=True)
+    new_rows = pd.DataFrame([vendor_row, total_cost_row, monthly_cost_row, winner_row], columns=report_df.columns)
+    report_df = pd.concat([report_df, new_rows], ignore_index=True)
 
     # Use a BytesIO buffer to save the Excel file in memory
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-        final_report_df.to_excel(writer, sheet_name='Quotation', index=False, header=False)
-        workbook = writer.book
-        worksheet = writer.sheets['Quotation']
-        
-        # Define a bold and colored format for #87E990
-        bold_and_colored_format = workbook.add_format({'bold': True, 'bg_color': '#87E990'})
-        
-        bold_format = workbook.add_format({'bold': True})
-        
-        # Define a format for the 'Gap analysis' row with text wrap
-        wrap_format = workbook.add_format({'text_wrap': True})
-
-        # Apply formatting
-        for row_idx, row in enumerate(final_report_df.values):
-            # Bold and color the field name and its corresponding value
-            if row[0] in ['Leasing company', 'Driver name', 'Vehicle Description', 'Vehicle description correspondence']:
-                worksheet.write(row_idx, 0, row[0], bold_format)
-                for col_idx in range(1, len(row)):
-                    worksheet.write(row_idx, col_idx, row[col_idx], bold_and_colored_format)
-            
-            # Highlight winner and corresponding monthly cost
-            if '🥇 Winner' in row:
-                winner_col_idx = list(row).index('🥇 Winner')
-                
-                # Highlight the Winner row cell with color
-                worksheet.write(row_idx, winner_col_idx, row[winner_col_idx], bold_and_colored_format)
-
-                # Find the 'Monthly Cost' row and highlight it with color
-                monthly_cost_row_idx = final_report_df[final_report_df['Field'] == 'Monthly Cost'].index[0]
-                winning_monthly_cost = final_report_df.iloc[monthly_cost_row_idx, winner_col_idx]
-                worksheet.write(monthly_cost_row_idx, winner_col_idx, winning_monthly_cost, bold_and_colored_format)
-                
-                # Highlight 'Vendor' and 'Total Cost' in the winning column with the new color #87E990
-                vendor_row_idx = final_report_df[final_report_df['Field'] == 'Vendor'].index[0]
-                total_cost_row_idx = final_report_df[final_report_df['Field'] == 'Total Cost'].index[0]
-
-                winning_vendor = final_report_df.iloc[vendor_row_idx, winner_col_idx]
-                winning_total_cost = final_report_df.iloc[total_cost_row_idx, winner_col_idx]
-                
-                worksheet.write(vendor_row_idx, winner_col_idx, winning_vendor, bold_and_colored_format)
-                worksheet.write(total_cost_row_idx, winner_col_idx, winning_total_cost, bold_and_colored_format)
-                
-            # Apply wrap text format to 'Gap analysis' and 'Additional equipment' rows
-            if row[0] in ['Gap analysis', 'Additional equipment']:
-                target_row_idx = final_report_df[final_report_df['Field'] == row[0]].index[0]
-                for col_idx in range(1, len(row)):
-                    worksheet.write(target_row_idx, col_idx, final_report_df.iloc[target_row_idx, col_idx], wrap_format)
-
-        # Fix column widths to prevent the wrapped text from making them too wide
-        for i, col in enumerate(final_report_df.columns):
-            if i > 0:
-                # Set a fixed, reasonable width for the offer columns
-                worksheet.set_column(i, i, 50)
-            else:
-                # Autofit the 'Field' column
-                max_len = final_report_df[col].astype(str).map(len).max()
-                worksheet.set_column(i, i, max_len + 2)
-            
+        report_df.to_excel(writer, sheet_name='Quotation', index=False, header=False)
+    
     buffer.seek(0)
     return buffer
 
