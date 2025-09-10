@@ -205,76 +205,79 @@ def process_uploaded_files(uploaded_files: List[Any]) -> List[ParsedOffer]:
 
 # --- Report Generation ---
 def generate_structured_report(offers: List[ParsedOffer], template_file: Any) -> io.BytesIO:
+    """
+    Populates the Excel template with parsed offers.
+    - Each offer gets its own column with the vendor name as header.
+    - Fields are written into the correct rows based on FIELD_TO_ROW_MAP.
+    - Winning vendor is written into template or a new 'Summary' sheet.
+    """
     try:
         workbook = openpyxl.load_workbook(io.BytesIO(template_file.getvalue()))
         sheet = workbook.active
         logger.info(f"Loaded template workbook. Active sheet: '{sheet.title}'")
 
-        # --- Vendor column mapping ---
+        # --- 1. Identify the header row (row containing 'Quote number' etc in column B) ---
+        header_row = None
+        for r in range(1, sheet.max_row + 1):
+            val = sheet.cell(row=r, column=2).value
+            if val and str(val).strip().lower() in [s.lower() for s in FIELD_TO_ROW_MAP.values()]:
+                header_row = r - 1  # assume headers are the row above the field names
+                break
+        if not header_row:
+            header_row = 2  # fallback
+
+        # --- 2. Ensure vendor columns exist or add them ---
         vendor_to_col_map = {}
-        header_rows = list(range(1, min(6, sheet.max_row + 1)))
-        header_cols = list(range(3, sheet.max_column + 1))
-        col_texts = {}
-        for col_idx in header_cols:
-            texts = []
-            for r in header_rows:
-                cv = sheet.cell(row=r, column=col_idx).value
-                if cv and isinstance(cv, str):
-                    texts.append(cv.strip())
-            if texts:
-                col_texts[col_idx] = " / ".join(texts)
+        existing_headers = {str(sheet.cell(row=header_row, column=c).value).strip(): c
+                            for c in range(3, sheet.max_column + 1)
+                            if sheet.cell(row=header_row, column=c).value}
 
         for offer in offers:
-            if not offer.vendor:
-                continue
-            vendor_norm = offer.vendor.lower().strip()
-            found = False
-            for col_idx, header_text in col_texts.items():
-                if vendor_norm in header_text.lower() or header_text.lower() in vendor_norm:
-                    vendor_to_col_map[offer.vendor] = col_idx
-                    found = True
-                    break
-            if not found:
-                matches = difflib.get_close_matches(vendor_norm, [t.lower() for t in col_texts.values()], n=1, cutoff=0.6)
-                if matches:
-                    matched = matches[0]
-                    for col_idx, header_text in col_texts.items():
-                        if header_text.lower() == matched:
-                            vendor_to_col_map[offer.vendor] = col_idx
-                            break
+            vendor_name = offer.vendor or offer.filename
+            if vendor_name in existing_headers:
+                vendor_to_col_map[vendor_name] = existing_headers[vendor_name]
+            else:
+                # Add new column at the end
+                new_col = sheet.max_column + 1
+                sheet.cell(row=header_row, column=new_col, value=vendor_name)
+                vendor_to_col_map[vendor_name] = new_col
+                logger.info(f"Added new column {new_col} for vendor '{vendor_name}'")
 
-        # --- Row mapping ---
-        description_to_row_map = {str(sheet.cell(row=r, column=2).value).strip(): r
-                                  for r in range(1, sheet.max_row + 1)
-                                  if sheet.cell(row=r, column=2).value}
+        # --- 3. Map descriptions (column B) to rows ---
+        description_to_row_map = {}
+        for row_idx in range(1, sheet.max_row + 1):
+            cell_value = sheet.cell(row=row_idx, column=2).value
+            if cell_value and isinstance(cell_value, str):
+                description_to_row_map[cell_value.strip()] = row_idx
 
-        # --- Write offers ---
+        # --- 4. Write each offer into its vendor column ---
         for offer in offers:
-            col_to_write = vendor_to_col_map.get(offer.vendor)
+            col_to_write = vendor_to_col_map.get(offer.vendor or offer.filename)
             if not col_to_write:
                 continue
-            for field, row_desc in FIELD_TO_ROW_MAP.items():
-                row_to_write = description_to_row_map.get(row_desc)
-                value = getattr(offer, field, None)
+            for field_name, row_description in FIELD_TO_ROW_MAP.items():
+                row_to_write = description_to_row_map.get(row_description)
+                value = getattr(offer, field_name, None)
                 if row_to_write and value is not None:
                     sheet.cell(row=row_to_write, column=col_to_write, value=value)
 
-        # --- Winner logic ---
+        # --- 5. Add winning vendor ---
         valid_offers = [o for o in offers if o.cost_per_month and o.cost_per_month > 0]
         if valid_offers:
             winner_offer = min(valid_offers, key=lambda o: float(o.cost_per_month))
+            # Try to write in template
             winner_row = None
             for desc, r in description_to_row_map.items():
                 if "winning" in desc.lower() or "winner" in desc.lower():
                     winner_row = r
                     break
             if winner_row:
-                winner_col = vendor_to_col_map.get(winner_offer.vendor, 3)
-                sheet.cell(row=winner_row, column=winner_col, value=winner_offer.vendor)
+                sheet.cell(row=winner_row, column=3, value=winner_offer.vendor)
             else:
                 summary = workbook.create_sheet("Summary") if "Summary" not in workbook.sheetnames else workbook["Summary"]
                 summary.append(["Winning leasing company", winner_offer.vendor])
 
+        # --- Save and return buffer ---
         buffer = io.BytesIO()
         workbook.save(buffer)
         buffer.seek(0)
@@ -284,6 +287,7 @@ def generate_structured_report(offers: List[ParsedOffer], template_file: Any) ->
         logger.error(f"Excel generation failed: {e}")
         traceback.print_exc()
         return io.BytesIO()
+
 
 # --- UI ---
 def display_parsing_results(offers: List[ParsedOffer]):
