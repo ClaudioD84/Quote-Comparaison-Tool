@@ -32,6 +32,7 @@ from dateutil import parser as dateparser
 from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.styles import Font
+import xlsxwriter
 
 # Configure logging
 @st.cache_resource
@@ -458,19 +459,28 @@ def main():
     
     # File upload
     st.header("📁 Upload Offers")
-    uploaded_files = st.file_uploader(
-        "Upload PDF leasing offers (2-10 files)",
+    
+    reference_file = st.file_uploader(
+        "Upload the Reference Offer (1 file)",
+        type=['pdf'],
+        accept_multiple_files=False,
+        help="Upload the PDF file that will be used as the benchmark for comparison"
+    )
+    
+    other_files = st.file_uploader(
+        "Upload Other Offers (1-9 files)",
         type=['pdf'],
         accept_multiple_files=True,
-        help="Upload PDF files containing leasing offers for the same vehicle"
+        help="Upload the other PDF files you want to compare against the reference offer"
     )
 
-    if uploaded_files:
-        if len(uploaded_files) >= 2:
+    if reference_file and other_files:
+        if len(other_files) >= 1:
+            uploaded_files = [reference_file] + other_files
             template_buffer = create_default_template()
             process_offers(template_buffer, uploaded_files)
         else:
-            st.warning("⚠️ Please upload at least 2 PDF files for comparison")
+            st.warning("⚠️ Please upload at least one other PDF file for comparison")
 
 def create_default_template() -> io.BytesIO:
     """Create a default Excel template file for demonstration."""
@@ -517,6 +527,45 @@ def calculate_similarity_score(s1: str, s2: str) -> float:
     
     matcher = difflib.SequenceMatcher(None, s1_preprocessed, s2_preprocessed)
     return matcher.ratio() * 100
+
+def get_offer_diff(offer1: ParsedOffer, offer2: ParsedOffer) -> str:
+    """Compares two ParsedOffer objects and returns a string summarizing the differences."""
+    diff_summary = []
+    
+    # List of key fields to compare
+    fields_to_compare = [
+        'vehicle_description', 'manufacturer', 'model', 'version', 'fuel_type',
+        'duration_months', 'total_mileage', 'monthly_rental', 'upfront_costs',
+        'admin_fees', 'maintenance_included', 'excess_mileage_rate', 'unused_mileage_rate',
+        'currency', 'vehicle_price', 'options_price', 'accessories_price', 'delivery_cost',
+        'registration_tax', 'total_net_investment', 'taxation_value', 'financial_rate',
+        'depreciation_interest', 'maintenance_repair', 'insurance_cost', 'green_tax',
+        'management_fee', 'tyres_cost', 'roadside_assistance', 'total_monthly_lease'
+    ]
+
+    for field in fields_to_compare:
+        val1 = getattr(offer1, field)
+        val2 = getattr(offer2, field)
+        
+        # Format values for display
+        if isinstance(val1, float) or isinstance(val2, float):
+            val1_str = f"{val1:,.2f}" if val1 is not None else "N/A"
+            val2_str = f"{val2:,.2f}" if val2 is not None else "N/A"
+        else:
+            val1_str = str(val1) if val1 is not None else "N/A"
+            val2_str = str(val2) if val2 is not None else "N/A"
+            
+        if val1_str.lower() == val2_str.lower():
+            continue
+
+        if val1 is None and val2 is not None:
+            diff_summary.append(f"• {field}: Not in reference vs {val2_str}")
+        elif val1 is not None and val2 is None:
+            diff_summary.append(f"• {field}: {val1_str} vs Not in offer")
+        else:
+            diff_summary.append(f"• {field}: {val1_str} vs {val2_str}")
+
+    return "\n".join(diff_summary) if diff_summary else "No significant differences found."
 
 def process_offers(template_buffer, uploaded_files):
     """Process uploaded offers and generate comparison"""
@@ -645,6 +694,8 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
         offer_data_list.append(offer_dict)
     
     offers_df = pd.DataFrame(offer_data_list)
+    reference_offer = offers[0]
+    other_offers = offers[1:]
 
     # Get the list of vendors to use as column headers
     vendors = [offer.get('vendor', 'Unknown Vendor') for offer in offer_data_list]
@@ -709,42 +760,36 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
     # Create the DataFrame from the collected rows
     final_report_df = pd.DataFrame(final_report_df_rows, columns=['Field'] + vendors)
 
-    # Calculate and add the single "Vehicle description correspondence" value
-    if len(offers_df) > 1:
-        vehicle_info_fields = [
-            'vehicle_description', 'manufacturer', 'model', 'version', 'jato_code',
-            'fuel_type', 'num_doors', 'hp', 'c02_emission', 'battery_range',
-            'accessories_price'
-        ]
-        
-        # Concatenate relevant information for each offer into a single string
-        vehicle_strings = []
-        for _, offer in offers_df.iterrows():
-            combined_info = " ".join([str(offer.get(f, '')) for f in vehicle_info_fields if offer.get(f) is not None])
-            vehicle_strings.append(combined_info)
-            
-        # Calculate pairwise similarity and average the scores
-        total_similarity = 0
-        pair_count = 0
-        for i in range(len(vehicle_strings)):
-            for j in range(i + 1, len(vehicle_strings)):
-                score = calculate_similarity_score(vehicle_strings[i], vehicle_strings[j])
-                total_similarity += score
-                pair_count += 1
-                
-        # Handle the case of no pairs
-        average_similarity = total_similarity / pair_count if pair_count > 0 else 100
-        
-        # Find the correct row index for "Vehicle description correspondence"
+    # Calculate and add the single "Vehicle description correspondence" value and "Gap analysis"
+    if len(offers) > 1:
         row_index = final_report_df[final_report_df['Field'] == 'Additional equipment'].index
         if not row_index.empty:
             insert_idx = row_index[0] + 1
+            
             # Add a blank row first
             final_report_df = pd.concat([final_report_df.iloc[:insert_idx], pd.DataFrame([[''] * (len(vendors) + 1)], columns=final_report_df.columns), final_report_df.iloc[insert_idx:]], ignore_index=True)
+            
             # Then add the correspondence row
-            new_row = ['Vehicle description correspondence'] + [''] * len(vendors)
-            new_row[1] = f"{average_similarity:.1f}%"
-            final_report_df = pd.concat([final_report_df.iloc[:insert_idx + 1], pd.DataFrame([new_row], columns=final_report_df.columns), final_report_df.iloc[insert_idx + 1:]], ignore_index=True)
+            correspondence_row = ['Vehicle description correspondence']
+            correspondence_row.append('100.0%') # Reference offer is always 100%
+            
+            for i, offer in enumerate(other_offers):
+                score = calculate_similarity_score(reference_offer.vehicle_description, offer.vehicle_description)
+                correspondence_row.append(f"{score:.1f}%")
+            
+            final_report_df = pd.concat([final_report_df.iloc[:insert_idx + 1], pd.DataFrame([correspondence_row], columns=final_report_df.columns), final_report_df.iloc[insert_idx + 1:]], ignore_index=True)
+            
+            # Add a blank row
+            final_report_df = pd.concat([final_report_df.iloc[:insert_idx + 2], pd.DataFrame([[''] * (len(vendors) + 1)], columns=final_report_df.columns), final_report_df.iloc[insert_idx + 2:]], ignore_index=True)
+
+            # Add Gap analysis row
+            gap_analysis_row = ['Gap analysis']
+            gap_analysis_row.append('N/A')
+            for offer in other_offers:
+                diff_text = get_offer_diff(reference_offer, offer)
+                gap_analysis_row.append(diff_text)
+            
+            final_report_df = pd.concat([final_report_df.iloc[:insert_idx + 3], pd.DataFrame([gap_analysis_row], columns=final_report_df.columns), final_report_df.iloc[insert_idx + 3:]], ignore_index=True)
 
 
     # Add Cost Analysis Summary at the bottom
@@ -783,32 +828,29 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
         worksheet = writer.sheets['Quotation']
         
         # Define a bold and colored format for #87E990
-        bold_and_colored_1 = workbook.add_format({'bold': True, 'bg_color': '#87E990'})
+        bold_and_colored_format = workbook.add_format({'bold': True, 'bg_color': '#87E990'})
         
-        # Define a bold and colored format for #87E990
-        bold_and_colored_2 = workbook.add_format({'bold': True, 'bg_color': '#87E990'})
-        
-        bold = workbook.add_format({'bold': True})
+        bold_format = workbook.add_format({'bold': True})
 
         # Apply formatting
         for row_idx, row in enumerate(final_report_df.values):
             # Bold and color the field name and its corresponding value
             if row[0] in ['Leasing company', 'Driver name', 'Vehicle Description', 'Vehicle description correspondence']:
-                worksheet.write(row_idx, 0, row[0], bold)
+                worksheet.write(row_idx, 0, row[0], bold_format)
                 for col_idx in range(1, len(row)):
-                    worksheet.write(row_idx, col_idx, row[col_idx], bold_and_colored_1)
+                    worksheet.write(row_idx, col_idx, row[col_idx], bold_and_colored_format)
 
             # Highlight winner and corresponding monthly cost
             if '🥇 Winner' in row:
                 winner_col_idx = list(row).index('🥇 Winner')
                 
-                # Highlight the Winner row cell with color #87E990
-                worksheet.write(row_idx, winner_col_idx, row[winner_col_idx], bold_and_colored_1)
+                # Highlight the Winner row cell with color
+                worksheet.write(row_idx, winner_col_idx, row[winner_col_idx], bold_and_colored_format)
 
-                # Find the 'Monthly Cost' row and highlight it with color #87E990
+                # Find the 'Monthly Cost' row and highlight it with color
                 monthly_cost_row_idx = final_report_df[final_report_df['Field'] == 'Monthly Cost'].index[0]
                 winning_monthly_cost = final_report_df.iloc[monthly_cost_row_idx, winner_col_idx]
-                worksheet.write(monthly_cost_row_idx, winner_col_idx, winning_monthly_cost, bold_and_colored_1)
+                worksheet.write(monthly_cost_row_idx, winner_col_idx, winning_monthly_cost, bold_and_colored_format)
                 
                 # Highlight 'Vendor' and 'Total Cost' in the winning column with the new color #87E990
                 vendor_row_idx = final_report_df[final_report_df['Field'] == 'Vendor'].index[0]
@@ -817,15 +859,17 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
                 winning_vendor = final_report_df.iloc[vendor_row_idx, winner_col_idx]
                 winning_total_cost = final_report_df.iloc[total_cost_row_idx, winner_col_idx]
                 
-                worksheet.write(vendor_row_idx, winner_col_idx, winning_vendor, bold_and_colored_2)
-                worksheet.write(total_cost_row_idx, winner_col_idx, winning_total_cost, bold_and_colored_2)
+                worksheet.write(vendor_row_idx, winner_col_idx, winning_vendor, bold_and_colored_format)
+                worksheet.write(total_cost_row_idx, winner_col_idx, winning_total_cost, bold_and_colored_format)
 
         # Autofit columns
         for i, col in enumerate(final_report_df.columns):
             max_len = final_report_df[col].astype(str).map(len).max()
+            if final_report_df.iloc[final_report_df[final_report_df['Field'] == 'Gap analysis'].index[0]][i]:
+                # Heuristic for 'Gap analysis' to ensure text is visible
+                max_len = max(max_len, 50)
             worksheet.set_column(i, i, max_len + 2)
-
-    
+            
     buffer.seek(0)
     return buffer
 
