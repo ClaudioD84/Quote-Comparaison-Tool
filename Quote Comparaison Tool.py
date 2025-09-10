@@ -536,12 +536,7 @@ def get_offer_diff(offer1: ParsedOffer, offer2: ParsedOffer) -> str:
     fields_to_compare = [
         'vehicle_description', 'manufacturer', 'model', 'version',
         'duration_months', 'total_mileage',
-        'upfront_costs', 'admin_fees', 'maintenance_included', 'excess_mileage_rate',
-        'unused_mileage_rate', 'currency', 'vehicle_price', 'options_price',
-        'accessories_price', 'delivery_cost', 'registration_tax',
-        'total_net_investment', 'taxation_value', 'financial_rate',
-        'depreciation_interest', 'maintenance_repair', 'insurance_cost', 'green_tax',
-        'management_fee', 'tyres_cost', 'roadside_assistance', 'total_monthly_lease',
+        'currency', 'total_net_investment', 'taxation_value', 'green_tax',
         'fuel_type',
     ]
 
@@ -635,6 +630,7 @@ def process_offers(template_buffer, uploaded_files):
     mapping_suggestions['Delivery cost'] = 'delivery_cost'
     mapping_suggestions['Registration tax'] = 'registration_tax'
     mapping_suggestions['Total net investment'] = 'total_net_investment'
+    mapping_suggestions['Taxation'] = 'taxation'
     mapping_suggestions['Taxation value'] = 'taxation_value'
     mapping_suggestions['Term (months)'] = 'duration_months'
     mapping_suggestions['Mileage per year (in km)'] = 'total_mileage'
