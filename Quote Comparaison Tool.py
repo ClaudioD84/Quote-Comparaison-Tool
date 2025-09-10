@@ -768,45 +768,44 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
     for index, row in template_df.iterrows():
         template_field = row['Field']
         
-        # Skip fields that are now handled separately or are no longer needed
-        if template_field in ['Quote number', 'Winner', 'Additional equipment', 'Additional equipment price']:
+        # Skip fields that are handled separately at the end
+        if template_field in ['Quote number', 'Winner']:
             continue
-        
-        # --- START OF NEW LOGIC FOR EQUIPMENT ---
-        if template_field == 'Equipment':
-            # Add a blank row for spacing and then the section header
-            final_report_df_rows.append([''] * (len(vendors) + 1))
-            final_report_df_rows.append(['Equipment'] + [''] * len(vendors))
-            
-            # Create a combined dictionary of equipment for each offer for easy lookup
-            all_offers_equipment = []
-            for offer in offers:
-                equipment_dict = {item['name']: item.get('price') for item in offer.options_list + offer.accessories_list}
-                all_offers_equipment.append(equipment_dict)
 
-            # Get a unique, sorted list of all equipment names across all offers
-            all_equipment_names = set()
+        # --- START OF NEW AGGREGATION LOGIC ---
+        # Handle the "Additional equipment" row by joining all item names
+        if template_field == 'Additional equipment':
+            new_row = [template_field]
             for offer in offers:
-                for item in offer.options_list + offer.accessories_list:
-                    all_equipment_names.add(item['name'])
-            
-            sorted_equipment_names = sorted(list(all_equipment_names))
-            
-            # Add each unique equipment item as a new row in the report
-            for equipment_name in sorted_equipment_names:
-                equipment_row = [equipment_name]
-                # For each offer, find the price for the current equipment item
-                for offer_equipment in all_offers_equipment:
-                    equipment_row.append(offer_equipment.get(equipment_name, None)) # Append price or None
-                final_report_df_rows.append(equipment_row)
-            
-            # After adding the itemized list, skip the default processing for the "Equipment" header
-            continue
-        # --- END OF NEW LOGIC FOR EQUIPMENT ---
+                # Combine names from both options and accessories
+                all_names = [item['name'] for item in offer.options_list + offer.accessories_list]
+                new_row.append(", ".join(all_names))
+            final_report_df_rows.append(new_row)
+            continue # Skip default processing for this row
+
+        # Handle the "Additional equipment price" row by summing all item prices
+        if template_field == 'Additional equipment price':
+            new_row = [template_field]
+            for offer in offers:
+                # Combine prices from both lists and sum them up
+                all_prices = [item.get('price', 0) or 0 for item in offer.options_list + offer.accessories_list]
+                total_price = sum(all_prices)
+                # Use the sum of options_price and accessories_price as a fallback
+                if total_price == 0:
+                    total_price = (offer.options_price or 0) + (offer.accessories_price or 0)
+                new_row.append(total_price if total_price > 0 else None)
+            final_report_df_rows.append(new_row)
+            continue # Skip default processing for this row
+        # --- END OF NEW AGGREGATION LOGIC ---
 
         # Add a blank row if the field is a new section header
-        if template_field in ['Driver name', 'Vehicle Description', 'Investment', 'Taxation', 'Duration & Mileage', 'Financial rate', 'Service rate', 'Monthly fee', 'Excess / unused km', 'Total cost']:
+        if template_field in ['Driver name', 'Vehicle Description', 'Investment', 'Taxation', 'Duration & Mileage', 'Financial rate', 'Service rate', 'Monthly fee', 'Excess / unused km', 'Total cost', 'Equipment']:
              final_report_df_rows.append([''] * (len(vendors) + 1))
+        
+        # Add the field title row (e.g., "Equipment" itself)
+        if template_field in ['Equipment']:
+            final_report_df_rows.append([template_field] + [''] * len(vendors))
+            continue
 
         # Add the field row with values from each offer (default behavior)
         new_row = [template_field]
@@ -914,8 +913,8 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
             if field_name in ['Leasing company', 'Driver name', 'Vehicle Description', 'Investment', 'Taxation', 'Duration & Mileage', 'Financial rate', 'Service rate', 'Monthly fee', 'Excess / unused km', 'Equipment', 'Cost Analysis', 'Gap analysis', 'Vehicle description correspondence']:
                 worksheet.write(r_idx, 0, field_name, bold_format)
             
-            # Apply text wrapping for Gap Analysis
-            if field_name == 'Gap analysis':
+            # Apply text wrapping for Gap Analysis and aggregated equipment names
+            if field_name in ['Gap analysis', 'Additional equipment']:
                 for c_idx in range(1, len(row)):
                     worksheet.write(r_idx, c_idx, row[c_idx], wrap_format)
             
