@@ -458,15 +458,6 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
     except Exception as e:
         raise ValueError(f"Failed to read Excel template. Error: {e}")
 
-    # Remove the Quote number row from the template to handle it separately
-    template_df = template_df[template_df['Field'] != 'Quote number']
-    
-    # Create a new DataFrame for the final report based on the template
-    report_df = template_df.copy()
-    
-    # Add an empty row at the top for the vendor name
-    report_df = pd.concat([pd.DataFrame([[''] * len(report_df.columns)], columns=report_df.columns), report_df], ignore_index=True)
-
     # Process offers and add their data to the report
     offer_data_list = []
     for offer in offers:
@@ -474,120 +465,100 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
         upfront_costs = (offer.upfront_costs or 0) + (offer.deposit or 0) + (offer.admin_fees or 0)
         offer_dict['total_contract_cost'] = (offer.monthly_rental * offer.duration_months) + upfront_costs if offer.monthly_rental and offer.duration_months else None
         offer_data_list.append(offer_dict)
-    
-    offers_df = pd.DataFrame(offer_data_list)
-    
-    # Add columns for each vendor and populate them
-    for _, offer in offers_df.iterrows():
-        vendor_name = offer['vendor'] or "Unknown Vendor"
-        
-        # Add new column and populate it based on the mapping
-        report_df[vendor_name] = ""
-        
-        # Populate the first cell with the vendor name
-        report_df.loc[0, vendor_name] = vendor_name
-        
-        # Populate data based on the template's structure using the user mapping
-        for index, row in report_df.iterrows():
-            template_field = row['Field']
-            llm_field_name = user_mapping.get(template_field)
-            
-            # Skip the first row which is for vendor name
-            if index == 0:
-                continue
 
+    # Get the list of vendors to use as column headers
+    vendors = [offer.get('vendor', 'Unknown Vendor') for offer in offer_data_list]
+    
+    # Initialize the list of rows for the final DataFrame
+    final_report_df_rows = []
+    
+    # First row: "Leasing company" and vendor names
+    leasing_company_row = ['Leasing company'] + vendors
+    final_report_df_rows.append(leasing_company_row)
+
+    # Second row: "Quote number" and quote numbers
+    quote_number_row = ['Quote number'] + [v.get('quote_number') for v in offer_data_list]
+    final_report_df_rows.append(quote_number_row)
+
+    # Rebuild the rest of the report based on the template fields
+    for index, row in template_df.iterrows():
+        template_field = row['Field']
+        
+        # Skip the Quote number row as it's already added
+        if template_field == 'Quote number':
+            continue
+
+        # Add a blank row if the field is a new section header
+        if template_field in ['Driver name', 'Vehicle Description', 'Investment', 'Total net investment', 'Taxation', 'Taxation value', 'Duration & Mileage', 'Mileage per year (in km)', 'Financial rate', 'Monthly financial rate (depreciation + interest)', 'Other fixed cost', 'Maintenance, repairs and tires', 'Fixed costs', 'Leasing payment', 'Excess costs']:
+             final_report_df_rows.append([''] * len(leasing_company_row))
+
+        # Add the field row with values from each offer
+        new_row = [template_field]
+        for offer in offer_data_list:
+            llm_field_name = user_mapping.get(template_field)
+            val = None
             if llm_field_name:
                 try:
-                    val = None
                     if template_field == 'Manufacturer':
-                        val = str(offer.get('vehicle_description', "")).split()[0]
+                        val = str(offer.get('vehicle_description', "")).split()[0] if offer.get('vehicle_description') else None
                     elif template_field == 'Model':
-                        val = " ".join(str(offer.get('vehicle_description', "")).split()[1:])
+                        val = " ".join(str(offer.get('vehicle_description', "")).split()[1:]) if offer.get('vehicle_description') else None
                     elif template_field == 'Fuel type':
                         val = 'EV' if 'el' in str(offer.get('vehicle_description', "")).lower() else None
                     elif template_field == 'Mileage per year (in km)':
                         if offer.get('duration_months') and offer.get('total_mileage'):
-                            val = offer.get('total_mileage') / (offer.get('duration_months') / 12)
+                            val = int(offer.get('total_mileage') / (offer.get('duration_months') / 12))
                     elif llm_field_name in offer:
-                         val = offer.get(llm_field_name)
-
-                    if val is not None:
-                        report_df.loc[index, vendor_name] = val
+                        val = offer.get(llm_field_name)
                 except (ValueError, TypeError):
-                    report_df.loc[index, vendor_name] = "N/A"
+                    val = "N/A"
+            new_row.append(val)
+        final_report_df_rows.append(new_row)
 
-    # Now, rebuild the DataFrame with empty rows in the correct places
-    final_report_df_rows = []
-    
-    # First row: "Leasing company"
-    leasing_company_row = ['Leasing company'] + [v['vendor'] for v in offer_data_list]
-    final_report_df_rows.append(leasing_company_row)
-
-    # Second row: "Quote number"
-    quote_number_row = ['Quote number'] + [v.get('quote_number') for v in offer_data_list]
-    final_report_df_rows.append(quote_number_row)
-
-    # Get the list of fields from the template, excluding the one we handled
-    field_list = template_df['Field'].tolist()
-
-    for field_name in field_list:
-        # Add a blank row if the field is a new section header
-        if field_name in ['Driver name', 'Vehicle Description', 'Investment', 'Total net investment', 'Taxation', 'Taxation value', 'Duration & Mileage', 'Mileage per year (in km)', 'Financial rate', 'Monthly financial rate (depreciation + interest)', 'Other fixed cost', 'Maintenance, repairs and tires', 'Fixed costs', 'Leasing payment', 'Excess costs']:
-            final_report_df_rows.append([''] * len(leasing_company_row))
-
-        # Add the field row
-        row_to_add = report_df[report_df['Field'] == field_name].iloc[0].tolist()
-        final_report_df_rows.append(row_to_add)
-
-    final_report_df = pd.DataFrame(final_report_df_rows, columns=['Field'] + [v['vendor'] for v in offer_data_list])
-
+    # Create the DataFrame from the collected rows
+    final_report_df = pd.DataFrame(final_report_df_rows, columns=['Field'] + vendors)
 
     # Vehicle Description Correspondence calculation
     if not offers_df.empty and len(offers_df) > 1:
         base_desc = offers_df.loc[0, 'vehicle_description'] or ""
         
         # Add a new row for correspondence
-        new_row_dict = {'Field': 'Vehicle description correspondence'}
-        
+        new_row = ['Vehicle description correspondence']
         for _, offer in offers_df.iterrows():
             desc_to_compare = offer.get('vehicle_description', "")
             similarity = calculate_similarity_score(base_desc, desc_to_compare)
-            vendor_col = offer.get('vendor', "Unknown Vendor")
-            new_row_dict[vendor_col] = f"{similarity:.1f}%"
-        
-        # Ensure the new row has the same columns before appending
-        new_row_df = pd.DataFrame([new_row_dict], columns=final_report_df.columns)
-        final_report_df = pd.concat([final_report_df, new_row_df], ignore_index=True)
+            new_row.append(f"{similarity:.1f}%")
 
+        # Pad the row to ensure it has the same number of columns
+        new_row += [''] * (len(final_report_df.columns) - len(new_row))
+        final_report_df.loc[len(final_report_df)] = new_row
 
-    # Add Cost Analysis Summary at the bottom with a line jump
-    final_report_df = pd.concat([final_report_df, pd.DataFrame([[''] * len(final_report_df.columns)], columns=final_report_df.columns)], ignore_index=True)
+    # Add Cost Analysis Summary at the bottom
+    final_report_df.loc[len(final_report_df)] = [''] * len(final_report_df.columns)
+    final_report_df.loc[len(final_report_df)] = ['Cost Analysis'] + [''] * (len(final_report_df.columns) - 1)
     
     cost_data = OfferComparator(offers, {}).calculate_total_costs()
     sorted_offers = pd.DataFrame(cost_data).sort_values('total_contract_cost')
     
-    # Add the cost analysis header row
-    final_report_df = pd.concat([final_report_df, pd.DataFrame([['Cost Analysis'] + [''] * (len(final_report_df.columns) - 1)], columns=final_report_df.columns)], ignore_index=True)
-
     # Add vendor, total cost, monthly cost, and winner row
-    vendor_row_data = ['Vendor'] + [row['vendor'] for _, row in sorted_offers.iterrows()]
-    total_cost_row_data = ['Total Cost'] + [f"{row['total_contract_cost']:,.2f}" for _, row in sorted_offers.iterrows()]
-    monthly_cost_row_data = ['Monthly Cost'] + [f"{row['cost_per_month']:,.2f}" for _, row in sorted_offers.iterrows()]
-    winner_row_data = ['Winner'] + ["🥇 Winner" if index == sorted_offers.index[0] else "" for index, _ in sorted_offers.iterrows()]
+    vendor_row = ['Vendor'] + [row['vendor'] for _, row in sorted_offers.iterrows()]
+    total_cost_row = ['Total Cost'] + [f"{row['total_contract_cost']:,.2f}" for _, row in sorted_offers.iterrows()]
+    monthly_cost_row = ['Monthly Cost'] + [f"{row['cost_per_month']:,.2f}" for _, row in sorted_offers.iterrows()]
+    winner_row = ['Winner'] + ["🥇 Winner" if index == sorted_offers.index[0] else "" for index, _ in sorted_offers.iterrows()]
 
-    # Pad rows to ensure they have the same length as the DataFrame columns
+    # Pad all rows to ensure they have the same length as the DataFrame columns
     num_cols = len(final_report_df.columns)
-    vendor_row_data += [''] * (num_cols - len(vendor_row_data))
-    total_cost_row_data += [''] * (num_cols - len(total_cost_row_data))
-    monthly_cost_row_data += [''] * (num_cols - len(monthly_cost_row_data))
-    winner_row_data += [''] * (num_cols - len(winner_row_data))
+    vendor_row += [''] * (num_cols - len(vendor_row))
+    total_cost_row += [''] * (num_cols - len(total_cost_row))
+    monthly_cost_row += [''] * (num_cols - len(monthly_cost_row))
+    winner_row += [''] * (num_cols - len(winner_row))
 
     final_report_df = pd.concat([
         final_report_df,
-        pd.DataFrame([vendor_row_data], columns=final_report_df.columns),
-        pd.DataFrame([total_cost_row_data], columns=final_report_df.columns),
-        pd.DataFrame([monthly_cost_row_data], columns=final_report_df.columns),
-        pd.DataFrame([winner_row_data], columns=final_report_df.columns)
+        pd.DataFrame([vendor_row], columns=final_report_df.columns),
+        pd.DataFrame([total_cost_row], columns=final_report_df.columns),
+        pd.DataFrame([monthly_cost_row], columns=final_report_df.columns),
+        pd.DataFrame([winner_row], columns=final_report_df.columns)
     ], ignore_index=True)
 
     # Use a BytesIO buffer to save the Excel file in memory
