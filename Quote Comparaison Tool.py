@@ -60,6 +60,8 @@ class ParsedOffer:
     maintenance_included: Optional[bool] = None
     excess_mileage_rate: Optional[float] = None
     currency: Optional[str] = None
+    company_name: Optional[str] = None  # New field
+    driver_name: Optional[str] = None    # New field
     parsing_confidence: float = 0.0
     warnings: List[str] = field(default_factory=list)
 
@@ -119,6 +121,8 @@ class LLMParser:
                         "maintenance_included": {"type": "BOOLEAN"},
                         "excess_mileage_rate": {"type": "NUMBER"},
                         "currency": {"type": "STRING"},
+                        "company_name": {"type": "STRING"},
+                        "driver_name": {"type": "STRING"},
                         "parsing_confidence": {"type": "NUMBER"},
                         "warnings": {"type": "ARRAY", "items": {"type": "STRING"}}
                     }
@@ -127,8 +131,6 @@ class LLMParser:
         }
         
         # Mocking the LLM's response for demonstration
-        # In a real application, you would make an HTTP POST request here
-        # to the specified API URL with the payload.
         # This mock data is based on the two PDFs from the user's query
         mock_responses = {
             "Kontraktoplæg_3052514001_1 (1).pdf": {
@@ -143,6 +145,8 @@ class LLMParser:
                 "maintenance_included": True,
                 "excess_mileage_rate": 0.50,
                 "currency": "DKK",
+                "company_name": "Grundfos",
+                "driver_name": "Mikkel Mikkelsen",
                 "parsing_confidence": 0.95,
                 "warnings": ["Total mileage calculated from annual mileage"]
             },
@@ -158,6 +162,8 @@ class LLMParser:
                 "maintenance_included": True,
                 "excess_mileage_rate": 0.7202,
                 "currency": "DKK",
+                "company_name": "Grundfos",
+                "driver_name": "Mikkel Mikkelsen",
                 "parsing_confidence": 0.98,
                 "warnings": ["Total mileage and duration parsed from combined string"]
             }
@@ -247,22 +253,33 @@ def main():
     
     # File upload
     st.header("📁 Upload Offers")
-    uploaded_files = st.file_uploader(
+    
+    if 'uploaded_files' not in st.session_state:
+        st.session_state.uploaded_files = []
+
+    uploaded_files_new = st.file_uploader(
         "Upload PDF leasing offers (2-10 files)",
         type=['pdf'],
         accept_multiple_files=True,
         help="Upload PDF files containing leasing offers for the same vehicle"
     )
 
-    if st.button("🎯 Load Demo Data", help="Load sample data for testing"):
-        uploaded_files = create_demo_data()
+    if uploaded_files_new:
+        st.session_state.uploaded_files = uploaded_files_new
 
-    if uploaded_files:
-        if len(uploaded_files) >= 2:
-            template_buffer = create_default_template()
-            process_offers(template_buffer, uploaded_files)
+    if st.button("🎯 Load Demo Data", help="Load sample data for testing"):
+        st.session_state.uploaded_files = create_demo_data()
+
+    if st.session_state.uploaded_files:
+        st.success(f"{len(st.session_state.uploaded_files)} files loaded.")
+
+    if st.button("Compare Offers"):
+        if len(st.session_state.uploaded_files) >= 2:
+            template_buffer = create_grundfos_template()
+            process_offers(template_buffer, st.session_state.uploaded_files)
         else:
-            st.warning("⚠️ Please upload at least 2 PDF files for comparison")
+            st.warning("⚠️ Please upload at least 2 PDF files for comparison or load demo data.")
+
 
 def create_demo_data():
     """Create dummy files for demonstration purposes."""
@@ -289,12 +306,12 @@ def create_demo_data():
     st.success("Demo data loaded! Please click the 'Compare Offers' button to proceed.")
     return uploaded_files
 
-def create_default_template() -> io.BytesIO:
-    """Create a default Excel template file for demonstration."""
+def create_grundfos_template() -> io.BytesIO:
+    """Create a new Excel template based on the user's TCO template."""
     template_data = {
         'Field': [
-            'Quote number', 'Driver name', 'Vehicle Description', 'Manufacturer', 'Model',
-            'Version', 'JATO code', 'Fuel type', 'No. doors', 'Number of gears', 'HP',
+            'Client name', 'Quote number', 'Driver name', 'Vehicle Description', 'Manufacturer', 'Model',
+            'Version', 'Fuel type', 'No. doors', 'Number of gears', 'HP',
             'C02 emission WLTP (g/km)', 'Battery range', 'Investment',
             'Vehicle list price (excl. VAT, excl. options)', 'Options (excl. taxes)',
             'Accessories (excl. taxes)', 'Delivery fee', 'Registration tax',
@@ -366,16 +383,14 @@ def process_offers(template_buffer, uploaded_files):
 
     # Create a dynamic mapping dictionary with initial AI guesses
     mapping_suggestions = defaultdict(str)
-    
-    # These are hardcoded for now, but in a real app would be dynamic
-    mapping_suggestions['Manufacturer'] = 'vehicle_description'
-    mapping_suggestions['Model'] = 'vehicle_description'
-    mapping_suggestions['Version'] = 'vehicle_description'
-    mapping_suggestions['Fuel type'] = 'vehicle_description'
+    mapping_suggestions['Client name'] = 'company_name'
+    mapping_suggestions['Driver name'] = 'driver_name'
+    mapping_suggestions['Quote number'] = 'filename' # Using filename as a proxy
+    mapping_suggestions['Vehicle Description'] = 'vehicle_description'
     mapping_suggestions['Term (months)'] = 'duration_months'
     mapping_suggestions['Mileage per year (in km)'] = 'total_mileage'
-    mapping_suggestions['Total TCO'] = 'total_contract_cost'
-    mapping_suggestions['Monthly TCO'] = 'monthly_rental'
+    mapping_suggestions['Monthly financial rate (depreciation + interest)'] = 'monthly_rental'
+    mapping_suggestions['Administration fee'] = 'admin_fees'
     
     user_mapping = {}
     with st.sidebar.expander("📝 Field Mappings"):
@@ -398,7 +413,12 @@ def process_offers(template_buffer, uploaded_files):
         
         try:
             excel_buffer = generate_excel_report(offers, template_buffer, user_mapping)
-            file_name = "Grundfos_Lars Østergaard"
+            
+            # Dynamically get company and driver names for the filename
+            company_name = offers[0].company_name if offers and offers[0].company_name else "Company"
+            driver_name = offers[0].driver_name if offers and offers[0].driver_name else "Driver"
+            file_name = f"{company_name}_{driver_name}"
+
             st.download_button(
                 label="⬇️ Download Excel Report",
                 data=excel_buffer,
@@ -423,7 +443,7 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
     for offer in offers:
         offer_dict = asdict(offer)
         offer_dict['total_contract_cost'] = (offer.monthly_rental * offer.duration_months) + (offer.upfront_costs or 0) + (offer.deposit or 0) + (offer.admin_fees or 0)
-        offer_data_for_df.append(offer_dict) # Corrected line: Use append and the correct variable name
+        offer_data_for_df.append(offer_dict) 
     
     offers_df = pd.DataFrame(offer_data_for_df)
     
@@ -446,13 +466,13 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
                 try:
                     # Special handling for composite fields like 'Manufacturer'
                     if template_field == 'Manufacturer':
-                        val = str(offer.get(llm_field_name, "")).split()[0]
+                        val = str(offer.get('vehicle_description', "")).split()[0]
                     elif template_field == 'Model':
-                        val = " ".join(str(offer.get(llm_field_name, "")).split()[1:])
+                        val = " ".join(str(offer.get('vehicle_description', "")).split()[1:])
                     elif template_field == 'Fuel type':
-                        val = 'EV' if 'el' in str(offer.get(llm_field_name, "")).lower() else None
+                        val = 'EV' if 'el' in str(offer.get('vehicle_description', "")).lower() else None
                     elif template_field == 'Mileage per year (in km)':
-                        val = offer.get(llm_field_name, 0) / (offer.get('duration_months', 12) / 12) if offer.get(llm_field_name) else None
+                        val = offer.get('total_mileage', 0) / (offer.get('duration_months', 12) / 12) if offer.get('total_mileage') else None
                     else:
                         val = offer.get(llm_field_name)
                     
@@ -475,7 +495,6 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
                 # Find the correct column for the vendor
                 vendor_col = offer.get('vendor', "Unknown Vendor")
                 if vendor_col in report_df.columns:
-                    # Update the newly added row
                     report_df.loc[report_df.index[-1], vendor_col] = f"{similarity:.1f}%"
 
     # Add Cost Analysis Summary at the bottom
@@ -489,6 +508,7 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
     for index, row in sorted_offers.iterrows():
         is_winner = "🥇 Winner" if index == 0 else ""
         report_df.loc[len(report_df)] = [row['vendor'], f"{row['total_contract_cost']:,.2f}", f"{row['cost_per_month']:,.2f}", is_winner] + [''] * (len(report_df.columns) - 4)
+
 
     # Use a BytesIO buffer to save the Excel file in memory
     buffer = io.BytesIO()
