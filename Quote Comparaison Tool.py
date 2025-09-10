@@ -80,6 +80,7 @@ class ParsedOffer:
     currency: Optional[str] = None
     parsing_confidence: float = 0.0
     warnings: List[str] = field(default_factory=list)
+    quote_number: Optional[str] = None
 
 def normalize_currency(currency_str: Optional[str]) -> Optional[str]:
     """Normalize currency string to a standard code."""
@@ -146,7 +147,8 @@ class LLMParser:
                         "excess_mileage_rate": {"type": "NUMBER"},
                         "currency": {"type": "STRING"},
                         "parsing_confidence": {"type": "NUMBER"},
-                        "warnings": {"type": "ARRAY", "items": {"type": "STRING"}}
+                        "warnings": {"type": "ARRAY", "items": {"type": "STRING"}},
+                        "quote_number": {"type": "STRING"}
                     }
                 }
             }
@@ -170,7 +172,8 @@ class LLMParser:
                 "excess_mileage_rate": 0.90,
                 "currency": "kr.",
                 "parsing_confidence": 0.95,
-                "warnings": ["Total mileage calculated from annual mileage"]
+                "warnings": ["Total mileage calculated from annual mileage"],
+                "quote_number": "3052514/001"
             },
             "quotation  2508.120.036 (1).pdf": {
                 "customer": "Grundfos EV",
@@ -187,7 +190,8 @@ class LLMParser:
                 "excess_mileage_rate": 0.7202,
                 "currency": "DKK",
                 "parsing_confidence": 0.98,
-                "warnings": ["Total mileage and duration parsed from combined string"]
+                "warnings": ["Total mileage and duration parsed from combined string"],
+                "quote_number": "2508.120.036"
             }
         }
         
@@ -454,18 +458,15 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
     except Exception as e:
         raise ValueError(f"Failed to read Excel template. Error: {e}")
 
+    # Remove the Quote number row from the template to handle it separately
+    template_df = template_df[template_df['Field'] != 'Quote number']
+    
     # Create a new DataFrame for the final report based on the template
     report_df = template_df.copy()
     
-    # Define a new, ordered DataFrame to build the report
-    final_report_rows = []
-    
-    # Add an empty row for the vendor name
-    final_report_rows.append([''] * len(report_df.columns))
-    
-    # Get the original column names to re-use them later
-    original_columns = report_df.columns.tolist()
-    
+    # Add an empty row at the top for the vendor name
+    report_df = pd.concat([pd.DataFrame([[''] * len(report_df.columns)], columns=report_df.columns), report_df], ignore_index=True)
+
     # Process offers and add their data to the report
     offer_data_list = []
     for offer in offers:
@@ -483,30 +484,12 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
         # Add new column and populate it based on the mapping
         report_df[vendor_name] = ""
         
-        # Populate the first cell in the new column with the vendor name
+        # Populate the first cell with the vendor name
         report_df.loc[0, vendor_name] = vendor_name
         
-        # Define the row indexes where empty lines should be inserted, based on the template
-        empty_line_indices = [
-            report_df[report_df['Field'] == 'Vehicle Description'].index[0],
-            report_df[report_df['Field'] == 'Investment'].index[0],
-            report_df[report_df['Field'] == 'Total net investment'].index[0],
-            report_df[report_df['Field'] == 'Taxation'].index[0],
-            report_df[report_df['Field'] == 'Taxation value'].index[0],
-            report_df[report_df['Field'] == 'Duration & Mileage'].index[0],
-            report_df[report_df['Field'] == 'Mileage per year (in km)'].index[0],
-            report_df[report_df['Field'] == 'Financial rate'].index[0],
-            report_df[report_df['Field'] == 'Monthly financial rate (depreciation + interest)'].index[0],
-            report_df[report_df['Field'] == 'Other fixed cost'].index[0],
-            report_df[report_df['Field'] == 'Maintenance, repairs and tires'].index[0],
-            report_df[report_df['Field'] == 'Fixed costs'].index[0],
-            report_df[report_df['Field'] == 'Leasing payment'].index[0],
-            report_df[report_df['Field'] == 'Excess costs'].index[0]
-        ]
-
         # Populate data based on the template's structure using the user mapping
         for index, row in report_df.iterrows():
-            template_field = row['Field'] # Assumes the first column has the labels
+            template_field = row['Field']
             llm_field_name = user_mapping.get(template_field)
             
             # Skip the first row which is for vendor name
@@ -516,7 +499,6 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
             if llm_field_name:
                 try:
                     val = None
-                    # Special handling for composite fields
                     if template_field == 'Manufacturer':
                         val = str(offer.get('vehicle_description', "")).split()[0]
                     elif template_field == 'Model':
@@ -535,20 +517,22 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
                     report_df.loc[index, vendor_name] = "N/A"
 
     # Now, rebuild the DataFrame with empty rows in the correct places
-    final_report_df_rows = [report_df.loc[0].tolist()] # Start with the vendor row
-    
-    current_index = 1
-    # Assuming 'Field' column is the reference
-    field_list = template_df['Field'].tolist()
+    final_report_df_rows = [['Leasing company'] + [v['vendor'] for v in offer_data_list]]
+    final_report_df_rows.append(['Quote number'] + [v.get('quote_number') for v in offer_data_list])
 
-    for i, field_name in enumerate(field_list):
-        if i > 0 and field_name in ['Vehicle Description', 'Investment', 'Total net investment', 'Taxation', 'Taxation value', 'Duration & Mileage', 'Mileage per year (in km)', 'Financial rate', 'Monthly financial rate (depreciation + interest)', 'Other fixed cost', 'Maintenance, repairs and tires', 'Fixed costs', 'Leasing payment', 'Excess costs']:
-            final_report_df_rows.append([''] * len(report_df.columns))
-        
+    # Get the list of fields from the template, excluding the one we handled
+    field_list = template_df['Field'].tolist()
+    
+    for field_name in field_list:
+        # Add a blank row if the field is a new section header
+        if field_name in ['Driver name', 'Vehicle Description', 'Investment', 'Total net investment', 'Taxation', 'Taxation value', 'Duration & Mileage', 'Mileage per year (in km)', 'Financial rate', 'Monthly financial rate (depreciation + interest)', 'Other fixed cost', 'Maintenance, repairs and tires', 'Fixed costs', 'Leasing payment', 'Excess costs']:
+             final_report_df_rows.append([''] * len(report_df.columns))
+
+        # Add the field row
         row_to_add = report_df[report_df['Field'] == field_name].iloc[0].tolist()
         final_report_df_rows.append(row_to_add)
 
-    final_report_df = pd.DataFrame(final_report_df_rows, columns=report_df.columns)
+    final_report_df = pd.DataFrame(final_report_df_rows, columns=['Field'] + [v['vendor'] for v in offer_data_list])
 
 
     # Vehicle Description Correspondence calculation
