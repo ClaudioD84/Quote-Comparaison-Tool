@@ -21,6 +21,8 @@ from typing import List, Dict, Any, Optional, Tuple, Union
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, date
 import requests
+import difflib
+from collections import defaultdict
 
 import streamlit as st
 import pandas as pd
@@ -165,12 +167,6 @@ class LLMParser:
         extracted_data = mock_responses.get(filename)
         
         if extracted_data:
-            # Add a mock warning if the filename is not in the hardcoded list
-            if not extracted_data:
-                extracted_data = {
-                    "warnings": ["Using fallback parsing, this is a mock LLM call."],
-                    "parsing_confidence": 0.5
-                }
             return ParsedOffer(filename=filename, **extracted_data)
         
         # Fallback for unknown files or if real API call fails
@@ -246,9 +242,8 @@ def main():
     Simply upload your PDF offers, and the app will extract the key data points automatically.
     """)
     
-    # Sidebar configuration
-    st.sidebar.header("⚙️ Configuration")
-    config = {}
+    # Sidebar for configuration
+    st.sidebar.header("⚙️ Configuration & Review")
     
     # File upload
     st.header("📁 Upload Offers")
@@ -258,13 +253,14 @@ def main():
         accept_multiple_files=True,
         help="Upload PDF files containing leasing offers for the same vehicle"
     )
-    
+
     if st.button("🎯 Load Demo Data", help="Load sample data for testing"):
         uploaded_files = create_demo_data()
-        
+
     if uploaded_files:
         if len(uploaded_files) >= 2:
-            process_offers(uploaded_files, config)
+            template_buffer = create_default_template()
+            process_offers(template_buffer, uploaded_files)
         else:
             st.warning("⚠️ Please upload at least 2 PDF files for comparison")
 
@@ -282,7 +278,6 @@ def create_demo_data():
             tmp.write(content.encode('utf-8'))
             tmp_path = tmp.name
         
-        # Mimic Streamlit's file object
         uploaded_file = st.runtime.uploaded_file_manager.UploadedFile(
             name=filename,
             type="application/pdf",
@@ -294,7 +289,49 @@ def create_demo_data():
     st.success("Demo data loaded! Please click the 'Compare Offers' button to proceed.")
     return uploaded_files
 
-def process_offers(uploaded_files, config):
+def create_default_template() -> io.BytesIO:
+    """Create a default Excel template file for demonstration."""
+    template_data = {
+        'Field': [
+            'Quote number', 'Driver name', 'Vehicle Description', 'Manufacturer', 'Model',
+            'Version', 'JATO code', 'Fuel type', 'No. doors', 'Number of gears', 'HP',
+            'C02 emission WLTP (g/km)', 'Battery range', 'Investment',
+            'Vehicle list price (excl. VAT, excl. options)', 'Options (excl. taxes)',
+            'Accessories (excl. taxes)', 'Delivery fee', 'Registration tax',
+            'Total net investment', 'Taxation', 'Taxation value', 'Duration & Mileage',
+            'Term (months)', 'Mileage per year (in km)', 'Financial rate',
+            'Monthly financial rate (depreciation + interest)', 'Other fixed cost',
+            'Maintenance, repairs and tires', 'Insurance', 'Administration fee',
+            'Fixed costs', 'Leasing payment', 'Excess costs', 'Total cost', 'Winner'
+        ],
+        'Value': [None] * 36
+    }
+    df = pd.DataFrame(template_data)
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+        df.to_excel(writer, sheet_name='Quotation', index=False)
+    buffer.seek(0)
+    return buffer
+
+def calculate_similarity_score(s1: str, s2: str) -> float:
+    """
+    Calculates a robust similarity score between two strings,
+    ignoring case, punctuation, and common words.
+    """
+    def preprocess(text: str) -> str:
+        text = text.lower()
+        text = re.sub(r'[^a-z0-9\s]', '', text)  # Remove punctuation
+        common_words = {'el', 'km', 'h', 'hp', 'd', 'f', 'gs', 'sky'}
+        tokens = [word for word in text.split() if word not in common_words]
+        return " ".join(tokens)
+    
+    s1_preprocessed = preprocess(s1)
+    s2_preprocessed = preprocess(s2)
+    
+    matcher = difflib.SequenceMatcher(None, s1_preprocessed, s2_preprocessed)
+    return matcher.ratio() * 100
+
+def process_offers(template_buffer, uploaded_files):
     """Process uploaded offers and generate comparison"""
     parser = LLMParser(api_key="your-api-key")
     offers = []
@@ -323,18 +360,147 @@ def process_offers(uploaded_files, config):
     
     display_parsing_results(offers)
     
-    comparator = OfferComparator(offers, config)
-    is_valid, errors = comparator.validate_offers()
+    # User-editable mapping section
+    st.sidebar.subheader("Review AI-Suggested Mappings")
+    st.sidebar.markdown("Review the AI's guesses for each field. You can edit them if needed.")
+
+    # Create a dynamic mapping dictionary with initial AI guesses
+    mapping_suggestions = defaultdict(str)
     
-    if not is_valid:
-        st.error("❌ Validation Errors: Offers cannot be compared due to inconsistencies.")
-        for error in errors:
-            st.error(f"• {error}")
-        return
+    # These are hardcoded for now, but in a real app would be dynamic
+    mapping_suggestions['Manufacturer'] = 'vehicle_description'
+    mapping_suggestions['Model'] = 'vehicle_description'
+    mapping_suggestions['Version'] = 'vehicle_description'
+    mapping_suggestions['Fuel type'] = 'vehicle_description'
+    mapping_suggestions['Term (months)'] = 'duration_months'
+    mapping_suggestions['Mileage per year (in km)'] = 'total_mileage'
+    mapping_suggestions['Total TCO'] = 'total_contract_cost'
+    mapping_suggestions['Monthly TCO'] = 'monthly_rental'
     
-    comparison_df = comparator.generate_comparison_report()
-    display_comparison_results(comparison_df)
+    user_mapping = {}
+    with st.sidebar.expander("📝 Field Mappings"):
+        for template_field, suggested_llm_field in mapping_suggestions.items():
+            user_mapping[template_field] = st.text_input(
+                f"Map '{template_field}' to which LLM field?", 
+                value=suggested_llm_field, 
+                key=f"map_{template_field}"
+            )
+
+    if st.button("Generate Report", help="Click to generate the final Excel report"):
+        comparator = OfferComparator(offers, {})
+        is_valid, errors = comparator.validate_offers()
+        
+        if not is_valid:
+            st.error("❌ Validation Errors: Offers cannot be compared due to inconsistencies.")
+            for error in errors:
+                st.error(f"• {error}")
+            return
+        
+        try:
+            excel_buffer = generate_excel_report(offers, template_buffer, user_mapping)
+            file_name = "Grundfos_Lars Østergaard"
+            st.download_button(
+                label="⬇️ Download Excel Report",
+                data=excel_buffer,
+                file_name=f"{file_name}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        except Exception as e:
+            st.error(f"❌ Error generating Excel report: {str(e)}")
+            logger.error(f"Excel generation error: {e}\n{traceback.format_exc()}")
+
+def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO, user_mapping: Dict[str, str]) -> io.BytesIO:
+    """Generate Excel report based on the provided template and parsed offers."""
     
+    # Load the template Excel file from the buffer
+    try:
+        template_df = pd.read_excel(template_buffer)
+    except Exception as e:
+        raise ValueError(f"Failed to read Excel template. Error: {e}")
+
+    # Create a new DataFrame from the parsed offers for easy manipulation
+    offer_data_for_df = []
+    for offer in offers:
+        offer_dict = asdict(offer)
+        offer_dict['total_contract_cost'] = (offer.monthly_rental * offer.duration_months) + (offer.upfront_costs or 0) + (offer.deposit or 0) + (offer.admin_fees or 0)
+        offer_data_for_df.append(offer_dict)
+    
+    offers_df = pd.DataFrame(offer_data_for_df)
+    
+    # Create the final DataFrame for the report
+    report_df = template_df.copy()
+    
+    # Add columns for each vendor and populate them
+    for _, offer in offers_df.iterrows():
+        vendor_name = offer['vendor'] or "Unknown Vendor"
+        
+        # Add new column and get the column's index
+        report_df.insert(len(report_df.columns), vendor_name, "")
+        vendor_col_index = len(report_df.columns) - 1
+        
+        # Populate data based on the template's structure using the user mapping
+        for index, row in report_df.iterrows():
+            template_field = row.iloc[0] # Assumes the first column has the labels
+            llm_field_name = user_mapping.get(template_field)
+            if llm_field_name:
+                try:
+                    # Special handling for composite fields like 'Manufacturer'
+                    if template_field == 'Manufacturer':
+                        val = str(offer.get(llm_field_name, "")).split()[0]
+                    elif template_field == 'Model':
+                        val = " ".join(str(offer.get(llm_field_name, "")).split()[1:])
+                    elif template_field == 'Fuel type':
+                        val = 'EV' if 'el' in str(offer.get(llm_field_name, "")).lower() else None
+                    elif template_field == 'Mileage per year (in km)':
+                        val = offer.get(llm_field_name, 0) / (offer.get('duration_months', 12) / 12) if offer.get(llm_field_name) else None
+                    else:
+                        val = offer.get(llm_field_name)
+                    
+                    report_df.iloc[index, vendor_col_index] = val
+                except (ValueError, TypeError):
+                    report_df.iloc[index, vendor_col_index] = "N/A"
+
+    # Vehicle Description Correspondence calculation
+    if not offers_df.empty and len(offers_df) > 1:
+        base_desc = offers_df.loc[0, 'vehicle_description'] or ""
+        
+        # Add the 'Correspondence (%)' row dynamically
+        new_row_idx = report_df.index.max() + 1
+        report_df.loc[new_row_idx, 'Field'] = 'Vehicle description correspondence'
+        report_df.loc[new_row_idx, 'Value'] = '100.0%'
+        
+        for idx, offer in offers_df.iterrows():
+            if idx > 0:
+                desc_to_compare = offer.get('vehicle_description', "")
+                similarity = calculate_similarity_score(base_desc, desc_to_compare)
+                # Find the correct column for the vendor
+                vendor_col = offer.get('vendor', "Unknown Vendor")
+                if vendor_col in report_df.columns:
+                    report_df.loc[new_row_idx, vendor_col] = f"{similarity:.1f}%"
+
+    # Add Cost Analysis Summary at the bottom
+    cost_data = OfferComparator(offers, {}).calculate_total_costs()
+    sorted_offers = pd.DataFrame(cost_data).sort_values('total_contract_cost')
+    
+    report_df = report_df.append(pd.Series(), ignore_index=True)
+    report_df = report_df.append(pd.Series(['Cost Analysis', None, None, None, None, None], index=report_df.columns), ignore_index=True)
+    report_df = report_df.append(pd.Series(['Vendor', 'Total Cost', 'Monthly Cost', 'Winner'], index=report_df.columns), ignore_index=True)
+
+    for index, row in sorted_offers.iterrows():
+        is_winner = "🥇 Winner" if index == 0 else ""
+        report_df = report_df.append(
+            pd.Series([row['vendor'], f"{row['total_contract_cost']:,.2f}", f"{row['cost_per_month']:,.2f}", is_winner], index=report_df.columns),
+            ignore_index=True
+        )
+
+    # Use a BytesIO buffer to save the Excel file in memory
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+        report_df.to_excel(writer, sheet_name='Quotation', index=False, header=False)
+    
+    buffer.seek(0)
+    return buffer
+
 def display_parsing_results(offers: List[ParsedOffer]):
     """Display parsing results summary"""
     st.header("📊 Parsing Results")
@@ -355,30 +521,6 @@ def display_parsing_results(offers: List[ParsedOffer]):
             if offer.warnings:
                 st.warning("⚠️ Warnings: " + ", ".join(offer.warnings))
             st.json(asdict(offer))
-
-def display_comparison_results(df: pd.DataFrame):
-    """Display comparison results"""
-    st.header("🏆 Comparison Results")
-    if df.empty:
-        st.error("No valid offers to compare.")
-        return
-    winner = df.loc[df['rank'] == 1].iloc[0]
-    st.success(f"🥇 **Winner: {winner['vendor']}** - Total Cost: {winner['total_contract_cost']:,.2f} {winner.get('currency', '')}")
-    st.subheader("📈 Detailed Comparison")
-    display_columns = [
-        'rank', 'vendor', 'monthly_rental', 'total_contract_cost', 
-        'cost_per_km', 'parsing_confidence'
-    ]
-    display_df = df[display_columns].copy()
-    st.dataframe(
-        display_df.style.format({
-            'monthly_rental': '{:,.2f}',
-            'total_contract_cost': '{:,.2f}',
-            'cost_per_km': '{:.4f}',
-            'parsing_confidence': '{:.1%}'
-        }).highlight_min(['total_contract_cost'], color='#d4edda'),
-        use_container_width=True
-    )
 
 if __name__ == "__main__":
     main()
