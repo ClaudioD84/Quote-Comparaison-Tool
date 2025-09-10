@@ -467,6 +467,10 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
 
     offers_df = pd.DataFrame(offer_data_list)
     
+    # Add an empty row at the top for the vendor name
+    vendor_row = [''] * len(report_df.columns)
+    report_df = pd.concat([pd.DataFrame([vendor_row], columns=report_df.columns), report_df], ignore_index=True)
+    
     # Add columns for each vendor and populate them
     for _, offer in offers_df.iterrows():
         vendor_name = offer['vendor'] or "Unknown Vendor"
@@ -474,11 +478,18 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
         # Add new column and populate it based on the mapping
         report_df[vendor_name] = ""
         
+        # Populate the first cell in the new column with the vendor name
+        report_df.loc[0, vendor_name] = vendor_name
+        
         # Populate data based on the template's structure using the user mapping
         for index, row in report_df.iterrows():
             template_field = row['Field'] # Assumes the first column has the labels
             llm_field_name = user_mapping.get(template_field)
             
+            # Skip the first row which is for vendor name
+            if index == 0:
+                continue
+
             if llm_field_name:
                 try:
                     val = None
@@ -515,12 +526,11 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
         
         report_df = pd.concat([report_df, pd.DataFrame([new_row_dict])], ignore_index=True)
 
-    # Add Cost Analysis Summary at the bottom
+    # Add Cost Analysis Summary at the bottom with a line jump
+    report_df = pd.concat([report_df, pd.DataFrame([['', ''] + [''] * (len(report_df.columns) - 2)], columns=report_df.columns)], ignore_index=True)
+    
     cost_data = OfferComparator(offers, {}).calculate_total_costs()
     sorted_offers = pd.DataFrame(cost_data).sort_values('total_contract_cost')
-    
-    # Add an empty row for separation
-    report_df = pd.concat([report_df, pd.DataFrame([['', ''] + [''] * (len(report_df.columns) - 2)], columns=report_df.columns)], ignore_index=True)
     
     # Add the cost analysis header row
     report_df = pd.concat([report_df, pd.DataFrame([['Cost Analysis'] + [''] * (len(report_df.columns) - 1)], columns=report_df.columns)], ignore_index=True)
