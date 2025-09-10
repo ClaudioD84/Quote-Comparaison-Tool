@@ -49,6 +49,8 @@ logger = setup_logging()
 class ParsedOffer:
     """Standardized structure for parsed leasing offer data"""
     filename: str
+    customer: Optional[str] = None
+    driver_name: Optional[str] = None
     vendor: Optional[str] = None
     vehicle_description: Optional[str] = None
     duration_months: Optional[int] = None
@@ -108,6 +110,8 @@ class LLMParser:
                 "responseSchema": {
                     "type": "OBJECT",
                     "properties": {
+                        "customer": {"type": "STRING"},
+                        "driver_name": {"type": "STRING"},
                         "vendor": {"type": "STRING"},
                         "vehicle_description": {"type": "STRING"},
                         "duration_months": {"type": "NUMBER"},
@@ -127,15 +131,15 @@ class LLMParser:
         }
         
         # Mocking the LLM's response for demonstration
-        # In a real application, you would make an HTTP POST request here
-        # to the specified API URL with the payload.
         # This mock data is based on the two PDFs from the user's query
         mock_responses = {
-            "Kontraktoplæg_3052514001_1 (1).pdf": {
+            "quotation_6351624001_Georges__Jean-Francois_1.pdf": {
+                "customer": "Philips",
+                "driver_name": "Georges Jean-Francois",
                 "vendor": "Ayvens",
-                "vehicle_description": "OPEL GRANDLAND EL 210",
-                "duration_months": 48,
-                "total_mileage": 140000,
+                "vehicle_description": "SKODA ELROQ BEV 82KWH 85 CORPORATE",
+                "duration_months": 60,
+                "total_mileage": 175000,
                 "monthly_rental": 5871.39,
                 "upfront_costs": 0,
                 "deposit": 0,
@@ -146,11 +150,13 @@ class LLMParser:
                 "parsing_confidence": 0.95,
                 "warnings": ["Total mileage calculated from annual mileage"]
             },
-            "quotation  2508.120.036 (1).pdf": {
+            "quotation_6351624001_Georges__Jean-Francois.pdf": {
+                "customer": "Philips",
+                "driver_name": "Georges Jean-Francois",
                 "vendor": "ARVAL",
-                "vehicle_description": "Opel Grandland EL 210 73kWh F GS Sky 5d",
-                "duration_months": 48,
-                "total_mileage": 140000,
+                "vehicle_description": "SKODA ELROQ BEV 82KWH 85 CORPORATE",
+                "duration_months": 60,
+                "total_mileage": 175000,
                 "monthly_rental": 5576.79,
                 "upfront_costs": 9900,
                 "deposit": None,
@@ -254,40 +260,12 @@ def main():
         help="Upload PDF files containing leasing offers for the same vehicle"
     )
 
-    if st.button("🎯 Load Demo Data", help="Load sample data for testing"):
-        uploaded_files = create_demo_data()
-
     if uploaded_files:
         if len(uploaded_files) >= 2:
             template_buffer = create_default_template()
             process_offers(template_buffer, uploaded_files)
         else:
             st.warning("⚠️ Please upload at least 2 PDF files for comparison")
-
-def create_demo_data():
-    """Create dummy files for demonstration purposes."""
-    st.info("Loading demo data...")
-    # These mock files contain the text content from the PDFs the user provided
-    demo_offers = [
-        ("Kontraktoplæg_3052514001_1 (1).pdf", "Kontraktoplæg 3052514/001 ... Periode (mdr.): 48 ... Kilometer pr. år: 35.000 ... Leasinggiver: Ayvens ..."),
-        ("quotation  2508.120.036 (1).pdf", "ARVAL ... quotation: 2508.120.03610/ ... contract annual kilometres/term (month): 35.000/48 ... price per month excl. VAT: 5.576,79 ...")
-    ]
-    uploaded_files = []
-    for filename, content in demo_offers:
-        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-            tmp.write(content.encode('utf-8'))
-            tmp_path = tmp.name
-        
-        uploaded_file = st.runtime.uploaded_file_manager.UploadedFile(
-            name=filename,
-            type="application/pdf",
-            path=tmp_path,
-            size=len(content.encode('utf-8'))
-        )
-        uploaded_files.append(uploaded_file)
-        
-    st.success("Demo data loaded! Please click the 'Compare Offers' button to proceed.")
-    return uploaded_files
 
 def create_default_template() -> io.BytesIO:
     """Create a default Excel template file for demonstration."""
@@ -368,6 +346,8 @@ def process_offers(template_buffer, uploaded_files):
     mapping_suggestions = defaultdict(str)
     
     # These are hardcoded for now, but in a real app would be dynamic
+    mapping_suggestions['Customer'] = 'customer'
+    mapping_suggestions['Driver name'] = 'driver_name'
     mapping_suggestions['Manufacturer'] = 'vehicle_description'
     mapping_suggestions['Model'] = 'vehicle_description'
     mapping_suggestions['Version'] = 'vehicle_description'
@@ -398,7 +378,13 @@ def process_offers(template_buffer, uploaded_files):
         
         try:
             excel_buffer = generate_excel_report(offers, template_buffer, user_mapping)
-            file_name = "Grundfos_Lars Østergaard"
+            
+            # Use customer and driver name for file naming
+            first_offer = offers[0]
+            customer_name = first_offer.customer if first_offer.customer else "Customer"
+            driver_name = first_offer.driver_name if first_offer.driver_name else "Driver"
+            file_name = f"{customer_name}_{driver_name}"
+
             st.download_button(
                 label="⬇️ Download Excel Report",
                 data=excel_buffer,
