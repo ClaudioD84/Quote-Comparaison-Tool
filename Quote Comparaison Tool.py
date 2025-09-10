@@ -195,7 +195,7 @@ class LLMParser:
         
         # Mocking the LLM's response for demonstration
         mock_responses = {
-            "Kontraktoplæg_3052514001_1 (1).pdf": {
+            "KontraktoplÃ¦g_3052514001_1 (1).pdf": {
                 "customer": "Grundfos A/S",
                 "driver_name": None,
                 "vendor": "Ayvens",
@@ -238,7 +238,7 @@ class LLMParser:
                 "roadside_assistance": 19.46,
                 "total_monthly_lease": 5871.39,
                 "options_list": [
-                    {"name": "læder pakke", "price": 16000.00},
+                    {"name": "lÃ¦der pakke", "price": 16000.00},
                     {"name": "Hvid", "price": 9600.00}
                 ],
                 "accessories_list": [
@@ -402,7 +402,7 @@ def create_demo_data():
     st.info("Loading demo data...")
     # These mock files contain the text content from the PDFs the user provided
     demo_offers = [
-        ("Kontraktoplæg_3052514001_1 (1).pdf", "Kontraktoplæg 3052514/001 ... Periode (mdr.): 48 ... Kilometer pr. år: 35.000 ... Leasinggiver: Ayvens ..."),
+        ("KontraktoplÃ¦g_3052514001_1 (1).pdf", "KontraktoplÃ¦g 3052514/001 ... Periode (mdr.): 48 ... Kilometer pr. Ã¥r: 35.000 ... Leasinggiver: Ayvens ..."),
         ("quotation  2508.120.036 (1).pdf", "ARVAL ... quotation: 2508.120.03610/ ... contract annual kilometres/term (month): 35.000/48 ... price per month excl. VAT: 5.576,79 ...")
     ]
     uploaded_files = []
@@ -435,9 +435,10 @@ def create_default_template() -> io.BytesIO:
             'Term (months)', 'Mileage per year (in km)', 'Financial rate',
             'Monthly financial rate (depreciation + interest)', 'Other fixed cost',
             'Maintenance, repairs and tires', 'Insurance', 'Administration fee',
-            'Fixed costs', 'Leasing payment', 'Excess costs', 'Total cost', 'Winner'
+            'Fixed costs', 'Leasing payment', 'Excess costs', 'Total cost', 'Winner',
+            'Additional equipment', 'Additional equipment price'
         ],
-        'Value': [None] * 36
+        'Value': [None] * 38
     }
     df = pd.DataFrame(template_data)
     buffer = io.BytesIO()
@@ -494,33 +495,33 @@ def process_offers(template_buffer, uploaded_files):
     display_parsing_results(offers)
     
     # User-editable mapping section
-st.sidebar.subheader("Review AI-Suggested Mappings")
-st.sidebar.markdown("Review the AI's guesses for each field. You can edit them if needed.")
+    st.sidebar.subheader("Review AI-Suggested Mappings")
+    st.sidebar.markdown("Review the AI's guesses for each field. You can edit them if needed.")
 
-# Create a dynamic mapping dictionary with initial AI guesses
-mapping_suggestions = defaultdict(str)
-
-# These are hardcoded for now, but in a real app would be dynamic
-mapping_suggestions['Manufacturer'] = 'vehicle_description'
-mapping_suggestions['Model'] = 'vehicle_description'
-mapping_suggestions['Version'] = 'vehicle_description'
-mapping_suggestions['Fuel type'] = 'vehicle_description'
-mapping_suggestions['Term (months)'] = 'duration_months'
-mapping_suggestions['Mileage per year (in km)'] = 'total_mileage'
-mapping_suggestions['Total TCO'] = 'total_contract_cost'
-mapping_suggestions['Monthly TCO'] = 'monthly_rental'
-# Add the new mappings for equipment
-mapping_suggestions['Additional equipment'] = 'equipment_combined'
-mapping_suggestions['Additional equipment price'] = 'equipment_price_total'
-
-user_mapping = {}
-with st.sidebar.expander("🔍 Field Mappings"):
-    for template_field, suggested_llm_field in mapping_suggestions.items():
-        user_mapping[template_field] = st.text_input(
-            f"Map '{template_field}' to which LLM field?", 
-            value=suggested_llm_field, 
-            key=f"map_{template_field}"
-        )
+    # Create a dynamic mapping dictionary with initial AI guesses
+    mapping_suggestions = defaultdict(str)
+    
+    # These are hardcoded for now, but in a real app would be dynamic
+    mapping_suggestions['Manufacturer'] = 'vehicle_description'
+    mapping_suggestions['Model'] = 'vehicle_description'
+    mapping_suggestions['Version'] = 'vehicle_description'
+    mapping_suggestions['Fuel type'] = 'vehicle_description'
+    mapping_suggestions['Term (months)'] = 'duration_months'
+    mapping_suggestions['Mileage per year (in km)'] = 'total_mileage'
+    mapping_suggestions['Total TCO'] = 'total_contract_cost'
+    mapping_suggestions['Monthly TCO'] = 'monthly_rental'
+    # Add the new mappings for equipment
+    mapping_suggestions['Additional equipment'] = 'equipment_combined'
+    mapping_suggestions['Additional equipment price'] = 'equipment_price_total'
+    
+    user_mapping = {}
+    with st.sidebar.expander("🔍 Field Mappings"):
+        for template_field, suggested_llm_field in mapping_suggestions.items():
+            user_mapping[template_field] = st.text_input(
+                f"Map '{template_field}' to which LLM field?", 
+                value=suggested_llm_field, 
+                key=f"map_{template_field}"
+            )
 
     if st.button("Generate Report", help="Click to generate the final Excel report"):
         comparator = OfferComparator(offers, {})
