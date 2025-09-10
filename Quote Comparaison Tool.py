@@ -23,13 +23,13 @@ from datetime import datetime, date
 import requests
 import difflib
 from collections import defaultdict
+import xlsxwriter
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 import pdfplumber
 from dateutil import parser as dateparser
-import xlsxwriter
 
 # Configure logging
 @st.cache_resource
@@ -94,6 +94,7 @@ class ParsedOffer:
     total_monthly_lease: Optional[float] = None
     driver_name: Optional[str] = None
     customer: Optional[str] = None
+    
     # New fields for itemized lists
     options_list: List[Dict[str, Union[str, float]]] = field(default_factory=list)
     accessories_list: List[Dict[str, Union[str, float]]] = field(default_factory=list)
