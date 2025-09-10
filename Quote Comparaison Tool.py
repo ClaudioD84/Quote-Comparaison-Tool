@@ -386,12 +386,6 @@ def process_offers(template_buffer, uploaded_files):
         st.error("❌ No offers could be processed successfully. Please check the file format.")
         return
         
-    # Consolidate customer and driver names before validation
-    common_customer, common_driver = consolidate_names(offers)
-    for offer in offers:
-        offer.customer = common_customer
-        offer.driver_name = common_driver
-
     display_parsing_results(offers)
     
     # User-editable mapping section
@@ -435,10 +429,10 @@ def process_offers(template_buffer, uploaded_files):
         try:
             excel_buffer = generate_excel_report(offers, template_buffer, user_mapping)
             
-            # Use customer and driver name for file naming
-            first_offer = offers[0]
-            customer_name = first_offer.customer if first_offer.customer else "Customer"
-            driver_name = first_offer.driver_name if first_offer.driver_name else "Driver"
+            # Use consolidated customer and driver names for file naming only
+            common_customer, common_driver = consolidate_names(offers)
+            customer_name = common_customer if common_customer else "Customer"
+            driver_name = common_driver if common_driver else "Driver"
             file_name = f"{customer_name}_{driver_name}".replace(" ", "_")
 
             st.download_button(
