@@ -532,20 +532,32 @@ def get_offer_diff(offer1: ParsedOffer, offer2: ParsedOffer) -> str:
     """Compares two ParsedOffer objects and returns a string summarizing the differences."""
     diff_summary = []
     
-    # List of key fields to compare
+    # List of key fields to compare, excluding the ones to ignore
     fields_to_compare = [
-        'vehicle_description', 'manufacturer', 'model', 'version', 'fuel_type',
-        'duration_months', 'total_mileage', 'monthly_rental', 'upfront_costs',
-        'admin_fees', 'maintenance_included', 'excess_mileage_rate', 'unused_mileage_rate',
-        'currency', 'vehicle_price', 'options_price', 'accessories_price', 'delivery_cost',
-        'registration_tax', 'total_net_investment', 'taxation_value', 'financial_rate',
+        'vehicle_description', 'manufacturer', 'model', 'version',
+        'duration_months', 'total_mileage',
+        'upfront_costs', 'admin_fees', 'maintenance_included', 'excess_mileage_rate',
+        'unused_mileage_rate', 'currency', 'vehicle_price', 'options_price',
+        'accessories_price', 'delivery_cost', 'registration_tax',
+        'total_net_investment', 'taxation_value', 'financial_rate',
         'depreciation_interest', 'maintenance_repair', 'insurance_cost', 'green_tax',
-        'management_fee', 'tyres_cost', 'roadside_assistance', 'total_monthly_lease'
+        'management_fee', 'tyres_cost', 'roadside_assistance', 'total_monthly_lease',
+        'fuel_type',
     ]
 
     for field in fields_to_compare:
         val1 = getattr(offer1, field)
         val2 = getattr(offer2, field)
+        
+        # Special handling for specific fields
+        if field == 'currency':
+            if normalize_currency(val1) == normalize_currency(val2):
+                continue
+        elif field == 'fuel_type':
+            val1_lower = str(val1).lower() if val1 else None
+            val2_lower = str(val2).lower() if val2 else None
+            if (val1_lower in ['bev', 'electric'] and val2_lower in ['bev', 'electric']) or (val1 == val2):
+                continue
         
         # Format values for display
         if isinstance(val1, float) or isinstance(val2, float):
@@ -566,6 +578,7 @@ def get_offer_diff(offer1: ParsedOffer, offer2: ParsedOffer) -> str:
             diff_summary.append(f"• {field}: {val1_str} vs {val2_str}")
 
     return "\n".join(diff_summary) if diff_summary else "No significant differences found."
+
 
 def process_offers(template_buffer, uploaded_files):
     """Process uploaded offers and generate comparison"""
