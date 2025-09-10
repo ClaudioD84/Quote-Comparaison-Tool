@@ -1,3 +1,15 @@
+"""
+AI-Powered Fleet Leasing Offer Comparator - Streamlit App
+This version uses a Large Language Model (LLM) to intelligently parse PDF content.
+Author: Fleet Management Tool
+Requirements:
+  streamlit, pandas, numpy, pdfplumber, python-dateutil, xlsxwriter
+Notes:
+  - This version uses a mock API call to demonstrate the LLM functionality.
+  - You can replace the mock logic with a real API call to a service like Gemini.
+  - The LLM can handle various languages and formats without needing specific regex rules.
+"""
+
 import io
 import re
 import sys
@@ -417,16 +429,15 @@ def create_default_template() -> io.BytesIO:
             'Quote number', 'Driver name', 'Vehicle Description', 'Manufacturer', 'Model',
             'Version', 'JATO code', 'Fuel type', 'No. doors', 'Number of gears', 'HP',
             'C02 emission WLTP (g/km)', 'Battery range', 'Investment',
-            'Vehicle list price (excl. VAT, excl. options)',
-            'Delivery cost', 'Registration tax',
+            'Vehicle list price (excl. VAT, excl. options)', 'Options (excl. taxes)',
+            'Accessories (excl. taxes)', 'Delivery cost', 'Registration tax',
             'Total net investment', 'Taxation', 'Taxation value', 'Duration & Mileage',
             'Term (months)', 'Mileage per year (in km)', 'Financial rate',
             'Monthly financial rate (depreciation + interest)', 'Other fixed cost',
             'Maintenance, repairs and tires', 'Insurance', 'Administration fee',
-            'Fixed costs', 'Leasing payment', 'Excess costs', 'Total cost', 'Winner',
-            'Additional equipment'
+            'Fixed costs', 'Leasing payment', 'Excess costs', 'Total cost', 'Winner'
         ],
-        'Value': [None] * 34
+        'Value': [None] * 36
     }
     df = pd.DataFrame(template_data)
     buffer = io.BytesIO()
@@ -483,31 +494,33 @@ def process_offers(template_buffer, uploaded_files):
     display_parsing_results(offers)
     
     # User-editable mapping section
-    st.sidebar.subheader("Review AI-Suggested Mappings")
-    st.sidebar.markdown("Review the AI's guesses for each field. You can edit them if needed.")
+st.sidebar.subheader("Review AI-Suggested Mappings")
+st.sidebar.markdown("Review the AI's guesses for each field. You can edit them if needed.")
 
-    # Create a dynamic mapping dictionary with initial AI guesses
-    mapping_suggestions = defaultdict(str)
-    
-    # These are hardcoded for now, but in a real app would be dynamic
-    mapping_suggestions['Manufacturer'] = 'vehicle_description'
-    mapping_suggestions['Model'] = 'vehicle_description'
-    mapping_suggestions['Version'] = 'vehicle_description'
-    mapping_suggestions['Fuel type'] = 'vehicle_description'
-    mapping_suggestions['Term (months)'] = 'duration_months'
-    mapping_suggestions['Mileage per year (in km)'] = 'total_mileage'
-    mapping_suggestions['Total TCO'] = 'total_contract_cost'
-    mapping_suggestions['Monthly TCO'] = 'monthly_rental'
-    mapping_suggestions['Additional equipment'] = 'options_list' # New mapping suggestion
-    
-    user_mapping = {}
-    with st.sidebar.expander("📝 Field Mappings"):
-        for template_field, suggested_llm_field in mapping_suggestions.items():
-            user_mapping[template_field] = st.text_input(
-                f"Map '{template_field}' to which LLM field?", 
-                value=suggested_llm_field, 
-                key=f"map_{template_field}"
-            )
+# Create a dynamic mapping dictionary with initial AI guesses
+mapping_suggestions = defaultdict(str)
+
+# These are hardcoded for now, but in a real app would be dynamic
+mapping_suggestions['Manufacturer'] = 'vehicle_description'
+mapping_suggestions['Model'] = 'vehicle_description'
+mapping_suggestions['Version'] = 'vehicle_description'
+mapping_suggestions['Fuel type'] = 'vehicle_description'
+mapping_suggestions['Term (months)'] = 'duration_months'
+mapping_suggestions['Mileage per year (in km)'] = 'total_mileage'
+mapping_suggestions['Total TCO'] = 'total_contract_cost'
+mapping_suggestions['Monthly TCO'] = 'monthly_rental'
+# Add the new mappings for equipment
+mapping_suggestions['Additional equipment'] = 'equipment_combined'
+mapping_suggestions['Additional equipment price'] = 'equipment_price_total'
+
+user_mapping = {}
+with st.sidebar.expander("🔍 Field Mappings"):
+    for template_field, suggested_llm_field in mapping_suggestions.items():
+        user_mapping[template_field] = st.text_input(
+            f"Map '{template_field}' to which LLM field?", 
+            value=suggested_llm_field, 
+            key=f"map_{template_field}"
+        )
 
     if st.button("Generate Report", help="Click to generate the final Excel report"):
         comparator = OfferComparator(offers, {})
@@ -568,22 +581,43 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
             llm_field_name = user_mapping.get(template_field)
             val = None
             
-            # Special handling for composite fields and calculations
-            if template_field == 'Manufacturer':
-                val = str(offer.get(llm_field_name, "")).split()[0] if offer.get(llm_field_name) else None
-            elif template_field == 'Model':
-                val = " ".join(str(offer.get(llm_field_name, "")).split()[1:]) if offer.get(llm_field_name) else None
-            elif template_field == 'Fuel type':
-                val = 'EV' if 'el' in str(offer.get(llm_field_name, "")).lower() else None
-            elif template_field == 'Mileage per year (in km)':
-                val = offer.get(llm_field_name, 0) / (offer.get('duration_months', 12) / 12) if offer.get(llm_field_name) else None
-            elif template_field == 'Additional equipment':
-                all_equipment_names = [item['name'] for item in offer.get('options_list', []) + offer.get('accessories_list', [])]
-                val = ", ".join(all_equipment_names) if all_equipment_names else None
-            elif llm_field_name and llm_field_name in offer:
-                val = offer.get(llm_field_name)
-            
-            report_df.iloc[index, vendor_col_index] = val
+            if llm_field_name and llm_field_name in offer:
+                try:
+                    # Special handling for composite fields and calculations
+                    if template_field == 'Manufacturer':
+                        val = str(offer.get(llm_field_name, "")).split()[0] if offer.get(llm_field_name) else None
+                    elif template_field == 'Model':
+                        val = " ".join(str(offer.get(llm_field_name, "")).split()[1:]) if offer.get(llm_field_name) else None
+                    elif template_field == 'Fuel type':
+                        val = 'EV' if 'el' in str(offer.get(llm_field_name, "")).lower() else None
+                    elif template_field == 'Mileage per year (in km)':
+                        val = offer.get(llm_field_name, 0) / (offer.get('duration_months', 12) / 12) if offer.get(llm_field_name) else None
+                    elif template_field == 'Additional equipment':
+                        # Combine all equipment names from options and accessories
+                        all_equipment_names = []
+                        for item in offer.get('options_list', []):
+                            if item.get('name'):
+                                all_equipment_names.append(item['name'])
+                        for item in offer.get('accessories_list', []):
+                            if item.get('name'):
+                                all_equipment_names.append(item['name'])
+                        val = ",".join(all_equipment_names) if all_equipment_names else None
+                    elif template_field == 'Additional equipment price':
+                        # Sum all equipment prices from options and accessories
+                        total_equipment_price = 0
+                        for item in offer.get('options_list', []):
+                            if item.get('price'):
+                                total_equipment_price += item['price']
+                        for item in offer.get('accessories_list', []):
+                            if item.get('price'):
+                                total_equipment_price += item['price']
+                        val = total_equipment_price if total_equipment_price > 0 else None
+                    else:
+                        val = offer.get(llm_field_name)
+                    
+                    report_df.iloc[index, vendor_col_index] = val
+                except (ValueError, TypeError):
+                    report_df.iloc[index, vendor_col_index] = "N/A"
 
     # Vehicle Description Correspondence calculation
     if not offers_df.empty and len(offers_df) > 1:
