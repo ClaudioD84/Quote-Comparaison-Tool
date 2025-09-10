@@ -5,5 +5,4 @@ pdfplumber
 python-dateutil
 xlsxwriter
 requests
-difflib
 openpyxl
