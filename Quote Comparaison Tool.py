@@ -782,8 +782,12 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
         workbook = writer.book
         worksheet = writer.sheets['Quotation']
         
-        # Define a bold and colored format
-        bold_and_colored = workbook.add_format({'bold': True, 'bg_color': '#87E990'})
+        # Define a bold and colored format for #7FFFD4
+        bold_and_colored_1 = workbook.add_format({'bold': True, 'bg_color': '#7FFFD4'})
+        
+        # Define a bold and colored format for #87E990
+        bold_and_colored_2 = workbook.add_format({'bold': True, 'bg_color': '#87E990'})
+        
         bold = workbook.add_format({'bold': True})
 
         # Apply formatting
@@ -792,14 +796,34 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
             if row[0] in ['Leasing company', 'Driver name', 'Vehicle Description', 'Vehicle description correspondence']:
                 worksheet.write(row_idx, 0, row[0], bold)
                 for col_idx in range(1, len(row)):
-                    worksheet.write(row_idx, col_idx, row[col_idx], bold_and_colored)
+                    worksheet.write(row_idx, col_idx, row[col_idx], bold_and_colored_1)
 
             # Highlight winner and corresponding monthly cost
             if '🥇 Winner' in row:
                 winner_col_idx = list(row).index('🥇 Winner')
-                worksheet.write(row_idx, winner_col_idx, row[winner_col_idx], bold_and_colored)
-                winning_monthly_cost = final_report_df.iloc[row_idx - 1, winner_col_idx]
-                worksheet.write(row_idx - 1, winner_col_idx, winning_monthly_cost, bold_and_colored)
+                
+                # Highlight the Winner row cell with color #7FFFD4
+                worksheet.write(row_idx, winner_col_idx, row[winner_col_idx], bold_and_colored_1)
+
+                # Find the 'Monthly Cost' row and highlight it with color #7FFFD4
+                monthly_cost_row_idx = final_report_df[final_report_df['Field'] == 'Monthly Cost'].index[0]
+                winning_monthly_cost = final_report_df.iloc[monthly_cost_row_idx, winner_col_idx]
+                worksheet.write(monthly_cost_row_idx, winner_col_idx, winning_monthly_cost, bold_and_colored_1)
+                
+                # Highlight 'Vendor' and 'Total Cost' in the winning column with the new color #87E990
+                vendor_row_idx = final_report_df[final_report_df['Field'] == 'Vendor'].index[0]
+                total_cost_row_idx = final_report_df[final_report_df['Field'] == 'Total Cost'].index[0]
+
+                winning_vendor = final_report_df.iloc[vendor_row_idx, winner_col_idx]
+                winning_total_cost = final_report_df.iloc[total_cost_row_idx, winner_col_idx]
+                
+                worksheet.write(vendor_row_idx, winner_col_idx, winning_vendor, bold_and_colored_2)
+                worksheet.write(total_cost_row_idx, winner_col_idx, winning_total_cost, bold_and_colored_2)
+
+        # Autofit columns
+        for i, col in enumerate(final_report_df.columns):
+            max_len = final_report_df[col].astype(str).map(len).max()
+            worksheet.set_column(i, i, max_len + 2)
 
     
     buffer.seek(0)
