@@ -423,7 +423,7 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
     for offer in offers:
         offer_dict = asdict(offer)
         offer_dict['total_contract_cost'] = (offer.monthly_rental * offer.duration_months) + (offer.upfront_costs or 0) + (offer.deposit or 0) + (offer.admin_fees or 0)
-        offer_data_for_pd.concat(offer_dict)
+        offer_data.concat(offer_dict)
     
     offers_df = pd.DataFrame(offer_data_for_df)
     
