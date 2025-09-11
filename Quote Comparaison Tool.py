@@ -159,7 +159,7 @@ class LLMParser:
         """
         Sends PDF text to the Gemini API for structured data extraction.
         """
-        logger.info(f"Sending text for parsing to Gemini for file: {filename}")
+        logger.info(f"Sending text for parsing to Gemma 3 for file: {filename}")
 
         # This defines the JSON structure we want the LLM to return
         json_schema = {
@@ -244,7 +244,7 @@ class LLMParser:
         
         # This is the corrected model call
         model = genai.GenerativeModel(
-            model_name='gemini-1.5-flash-latest', # Using a model that supports system_instruction and JSON mode
+            model_name='models/gemma-3-27b-it',
             system_instruction=system_instruction,
             generation_config=generation_config
         )
@@ -254,7 +254,7 @@ class LLMParser:
             response = model.generate_content(text)
 
             # The response text should be a valid JSON string
-            logger.info(f"Received raw JSON response from Gemini for {filename}")
+            logger.info(f"Received raw JSON response from Gemma 3 for {filename}")
             extracted_data = json.loads(response.text)
 
             # Ensure lists are initialized as empty lists if they are null
@@ -264,7 +264,7 @@ class LLMParser:
             return ParsedOffer(filename=filename, **extracted_data)
 
         except Exception as e:
-            logger.error(f"Error during Gemini API call for {filename}: {str(e)}")
+            logger.error(f"Error during Gemma 3 API call for {filename}: {str(e)}")
             logger.error(traceback.format_exc())
             # Return a fallback object with a warning
             return ParsedOffer(
@@ -867,8 +867,14 @@ def display_parsing_results(offers: List[ParsedOffer]):
             st.write(f"**{offer.vendor or offer.filename}**")
             st.write(f"Confidence: {offer.parsing_confidence:.1%}")
             if offer.warnings:
-                st.warning("⚠️ Warnings: " + ", ".join(offer.warnings))
+                st.warning("⚠️ Warnings:")
+                for w in offer.warnings:
+                    st.write(f"- {w}")
+            
+            # Display key extracted data
+            st.write("---")
+            st.write("**Extracted Data**")
             st.json(asdict(offer))
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
