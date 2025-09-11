@@ -55,6 +55,7 @@ CURRENCY_MAP = {
     'dkk': 'DKK',
     '€': 'EUR',
     'eur': 'EUR',
+    'euro': 'EUR',
     '£': 'GBP',
     'gbp': 'GBP',
     'chf': 'CHF',
@@ -549,7 +550,7 @@ def process_offers(api_key: str, template_buffer, uploaded_files):
     mapping_suggestions['Green tax*'] = 'green_tax'
     mapping_suggestions['Management fee'] = 'management_fee'
     mapping_suggestions['Tyres (summer and winter)'] = 'tyres_cost'
-    mapping_suggestions['Road side assistance'] = 'roadside_assistance'
+    mapping_suggestions['Roadside assistance'] = 'roadside_assistance'
     mapping_suggestions['Total monthly service rate'] = 'total_monthly_service_rate'
     mapping_suggestions['Total monthly lease ex. VAT'] = 'total_monthly_lease'
     mapping_suggestions['Excess kilometers'] = 'excess_mileage_rate'
