@@ -218,13 +218,15 @@ class LLMParser:
             response_schema=json_schema
         )
 
-        # The system instruction now explicitly asks for two sets of values
+        # The system instruction now explicitly asks for two sets of values and clarifies mileage calculation
         system_instruction = """
         You are a world-class financial analyst specializing in fleet leasing. Your task is to extract key data points from a vehicle leasing contract, regardless of the language or format.
 
         IMPORTANT: Distinguish between the **maximum allowed** contract terms and the **actual terms of the offer**.
         - The `max_duration_months` and `max_total_mileage` refer to the maximum possible contract length and total mileage allowed by the leasing company (e.g., "Max contract: 60 months / 300,000 km").
         - The `offer_duration_months` and `offer_total_mileage` refer to the specific terms of the current offer (e.g., "Current offer: 36 months / 175,000 km").
+
+        If the document states the annual mileage and contract duration, calculate the `offer_total_mileage` by multiplying the annual mileage by the duration in months and dividing by 12. For example, for "35,000 km per year / 48 months", the total mileage is 35000 * 48 / 12 = 140000.
 
         Return the data as a JSON object strictly following the provided schema. If a value is not found, use `null` or `false`. Do not make up values.
         """
@@ -342,7 +344,7 @@ def main():
     # --- API Key Input ---
     # The recommended way is to enter the key in the sidebar.
     # For local testing, you can uncomment and replace the line below.
-    # api_key = "api_key"
+    # api_key = AIzaSyD07ltM6lxSsD0065ft2SU7JHnnW8yhq54
     api_key = st.sidebar.text_input(
         "Enter your Google AI API Key",
         type="password",
