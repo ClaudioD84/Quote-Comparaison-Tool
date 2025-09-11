@@ -245,7 +245,7 @@ class LLMParser:
         # Initialize the model with the system instruction and generation config
         # CHANGING MODEL FROM gemini-1.5-flash-latest TO gemma-3.27b-it
         model = genai.GenerativeModel(
-            model_name='gemma-3.27b-it',
+            model_name='gemma-3-27b-it',
             system_instruction=system_instruction,
             generation_config=generation_config
         )
