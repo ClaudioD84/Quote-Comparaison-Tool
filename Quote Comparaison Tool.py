@@ -1,7 +1,7 @@
 """
 AI-Powered Fleet Leasing Offer Comparator - Streamlit App
 This version uses a Large Language Model (LLM) to intelligently parse PDF content.
-Author: Fleet Management Tool
+Author: OviDrive
 Requirements:
   streamlit, pandas, numpy, pdfplumber, python-dateutil, xlsxwriter
 Notes:
