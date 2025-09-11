@@ -71,8 +71,11 @@ class ParsedOffer:
     filename: str
     vendor: Optional[str] = None
     vehicle_description: Optional[str] = None
-    duration_months: Optional[int] = None
-    total_mileage: Optional[int] = None
+    # Separate fields for actual and maximum contract terms
+    max_duration_months: Optional[int] = None
+    max_total_mileage: Optional[int] = None
+    offer_duration_months: Optional[int] = None
+    offer_total_mileage: Optional[int] = None
     monthly_rental: Optional[float] = None
     upfront_costs: Optional[float] = None
     deposit: Optional[float] = None
@@ -161,8 +164,11 @@ class LLMParser:
             "properties": {
                 "vendor": {"type": "STRING"},
                 "vehicle_description": {"type": "STRING"},
-                "duration_months": {"type": "NUMBER"},
-                "total_mileage": {"type": "NUMBER"},
+                # New fields for distinguishing between offer and max terms
+                "max_duration_months": {"type": "NUMBER"},
+                "max_total_mileage": {"type": "NUMBER"},
+                "offer_duration_months": {"type": "NUMBER"},
+                "offer_total_mileage": {"type": "NUMBER"},
                 "monthly_rental": {"type": "NUMBER"},
                 "upfront_costs": {"type": "NUMBER"},
                 "deposit": {"type": "NUMBER"},
@@ -212,8 +218,16 @@ class LLMParser:
             response_schema=json_schema
         )
 
-        # The system instruction guides the model's behavior
-        system_instruction = "You are a world-class financial analyst. Your task is to extract key data points from a vehicle leasing contract, regardless of the language or format. Return the data as a JSON object strictly following the provided schema. If a value is not found, use `null` or `false`. Do not make up values."
+        # The system instruction now explicitly asks for two sets of values
+        system_instruction = """
+        You are a world-class financial analyst specializing in fleet leasing. Your task is to extract key data points from a vehicle leasing contract, regardless of the language or format.
+
+        IMPORTANT: Distinguish between the **maximum allowed** contract terms and the **actual terms of the offer**.
+        - The `max_duration_months` and `max_total_mileage` refer to the maximum possible contract length and total mileage allowed by the leasing company (e.g., "Max contract: 60 months / 300,000 km").
+        - The `offer_duration_months` and `offer_total_mileage` refer to the specific terms of the current offer (e.g., "Current offer: 36 months / 175,000 km").
+
+        Return the data as a JSON object strictly following the provided schema. If a value is not found, use `null` or `false`. Do not make up values.
+        """
 
         # Initialize the model with the system instruction and generation config
         model = genai.GenerativeModel(
@@ -249,9 +263,8 @@ class LLMParser:
 class OfferComparator:
     """Handles comparison and analysis of multiple offers"""
 
-    def __init__(self, offers: List[ParsedOffer], config: Dict[str, Any]):
+    def __init__(self, offers: List[ParsedOffer]):
         self.offers = offers
-        self.config = config
 
     def validate_offers(self) -> Tuple[bool, List[str]]:
         """Validate that offers can be compared"""
@@ -260,14 +273,14 @@ class OfferComparator:
             errors.append("Need at least 2 offers for comparison")
             return False, errors
 
-        # --- FIX: Use normalize_currency here ---
+        # Use the actual offer terms for validation
         normalized_currencies = [normalize_currency(o.currency) for o in self.offers if o.currency]
         if len(set(normalized_currencies)) > 1:
             errors.append(f"Mixed currencies detected: {set(normalized_currencies)}")
 
-        durations = [o.duration_months for o in self.offers if o.duration_months]
-        mileages = [o.total_mileage for o in self.offers if o.total_mileage]
-        
+        durations = [o.offer_duration_months for o in self.offers if o.offer_duration_months]
+        mileages = [o.offer_total_mileage for o in self.offers if o.offer_total_mileage]
+
         if len(durations) != len(self.offers) or None in durations:
             errors.append("Some offers are missing contract duration.")
         elif len(set(durations)) > 1:
@@ -275,16 +288,8 @@ class OfferComparator:
 
         if len(mileages) != len(self.offers) or None in mileages:
             errors.append("Some offers are missing mileage information.")
-        # --- FIX: Add mileage tolerance check ---
         elif len(set(mileages)) > 1:
-            reference_mileage = self.offers[0].total_mileage
-            mileage_tolerance = self.config.get('mileage_tolerance_percent', 10) / 100.0  # Default to 10%
-            is_consistent = all(
-                abs(m - reference_mileage) / reference_mileage <= mileage_tolerance
-                for m in mileages
-            )
-            if not is_consistent:
-                errors.append(f"Contract mileages don't match: {set(mileages)}")
+            errors.append(f"Contract mileages don't match: {set(mileages)}")
 
         return len(errors) == 0, errors
 
@@ -292,21 +297,22 @@ class OfferComparator:
         """Calculate total contract costs for all offers"""
         results = []
         for offer in self.offers:
-            if not offer.duration_months or not offer.monthly_rental:
+            # Use the actual offer terms for cost calculation
+            if not offer.offer_duration_months or not offer.monthly_rental:
                 results.append({'vendor': offer.vendor, 'error': 'Missing essential data for cost calculation'})
                 continue
-            monthly_total = offer.monthly_rental * offer.duration_months
+            monthly_total = offer.monthly_rental * offer.offer_duration_months
             upfront_total = (offer.upfront_costs or 0) + (offer.deposit or 0) + (offer.admin_fees or 0)
             total_cost = monthly_total + upfront_total
             results.append({
                 'vendor': offer.vendor,
                 'vehicle': offer.vehicle_description,
-                'duration_months': offer.duration_months,
-                'total_mileage': offer.total_mileage,
+                'duration_months': offer.offer_duration_months,
+                'total_mileage': offer.offer_total_mileage,
                 'monthly_rental': offer.monthly_rental,
                 'total_contract_cost': total_cost,
-                'cost_per_month': total_cost / offer.duration_months,
-                'cost_per_km': total_cost / offer.total_mileage if offer.total_mileage else None,
+                'cost_per_month': total_cost / offer.offer_duration_months,
+                'cost_per_km': total_cost / offer.offer_total_mileage if offer.offer_total_mileage else None,
                 'currency': offer.currency,
                 'parsing_confidence': offer.parsing_confidence,
                 'warnings': offer.warnings
@@ -342,15 +348,6 @@ def main():
         type="password",
         help="Get your API key from Google AI Studio. For deployed apps, use st.secrets."
     )
-    
-    # --- Mileage Tolerance Input ---
-    mileage_tolerance = st.sidebar.number_input(
-        "Mileage Tolerance (%)",
-        min_value=0,
-        max_value=100,
-        value=10,
-        help="Allowed percentage difference in total mileage for comparison."
-    )
 
     # File upload
     st.header("📁 Upload Offers")
@@ -379,7 +376,7 @@ def main():
             uploaded_files = [reference_file] + other_files
             template_buffer = create_default_template()
             # Pass the api_key to the processing function
-            process_offers(api_key, template_buffer, uploaded_files, {'mileage_tolerance_percent': mileage_tolerance})
+            process_offers(api_key, template_buffer, uploaded_files)
         else:
             st.warning("⚠️ Please upload at least one other PDF file for comparison")
 
@@ -437,7 +434,8 @@ def get_offer_diff(offer1: ParsedOffer, offer2: ParsedOffer) -> str:
     # List of key fields to compare, excluding the ones to ignore
     fields_to_compare = [
         'vehicle_description', 'manufacturer', 'model', 'version',
-        'duration_months', 'total_mileage',
+        # Use the actual offer terms for comparison
+        'offer_duration_months', 'offer_total_mileage',
         'currency', 'total_net_investment', 'taxation_value', 'green_tax',
         'fuel_type',
     ]
@@ -476,7 +474,7 @@ def get_offer_diff(offer1: ParsedOffer, offer2: ParsedOffer) -> str:
 
     return "\n".join(diff_summary) if diff_summary else "No significant differences found."
 
-def process_offers(api_key: str, template_buffer, uploaded_files, config: Dict[str, Any]):
+def process_offers(api_key: str, template_buffer, uploaded_files):
     """Process uploaded offers and generate comparison"""
     try:
         parser = LLMParser(api_key=api_key)
@@ -538,8 +536,10 @@ def process_offers(api_key: str, template_buffer, uploaded_files, config: Dict[s
     mapping_suggestions['Total net investment'] = 'total_net_investment'
     mapping_suggestions['Taxation'] = 'taxation'
     mapping_suggestions['Taxation value'] = 'taxation_value'
-    mapping_suggestions['Term (months)'] = 'duration_months'
-    mapping_suggestions['Mileage per year (in km)'] = 'total_mileage'
+    # Map 'Term (months)' to the actual offer duration
+    mapping_suggestions['Term (months)'] = 'offer_duration_months'
+    # Map 'Mileage per year (in km)' to the actual offer mileage
+    mapping_suggestions['Mileage per year (in km)'] = 'offer_total_mileage'
     mapping_suggestions['Financial rate'] = 'financial_rate'
     mapping_suggestions['Monthly financial rate (depreciation + interest)'] = 'depreciation_interest'
     mapping_suggestions['Maintenance & repair'] = 'maintenance_repair'
@@ -563,7 +563,7 @@ def process_offers(api_key: str, template_buffer, uploaded_files, config: Dict[s
             )
 
     if st.button("Generate Report", help="Click to generate the final Excel report"):
-        comparator = OfferComparator(offers, config) # Pass config here
+        comparator = OfferComparator(offers)
         is_valid, errors = comparator.validate_offers()
 
         if not is_valid:
@@ -629,7 +629,8 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
     for offer in offers:
         offer_dict = asdict(offer)
         upfront_costs = (offer.upfront_costs or 0) + (offer.deposit or 0) + (offer.admin_fees or 0)
-        offer_dict['total_contract_cost'] = (offer.monthly_rental * offer.duration_months) + upfront_costs if offer.monthly_rental and offer.duration_months else None
+        # Use the actual offer terms for calculation
+        offer_dict['total_contract_cost'] = (offer.monthly_rental * offer.offer_duration_months) + upfront_costs if offer.monthly_rental and offer.offer_duration_months else None
         offer_data_list.append(offer_dict)
 
     offers_df = pd.DataFrame(offer_data_list)
@@ -702,12 +703,9 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
                 try:
                     if llm_field_name in offer:
                         if template_field == 'Mileage per year (in km)':
-                            if offer.get('duration_months') and offer.get('total_mileage'):
-                                # Fix: Handle potential division by zero
-                                if offer.get('duration_months') > 0:
-                                    val = int(offer.get('total_mileage') / (offer.get('duration_months') / 12))
-                                else:
-                                    val = None
+                            # Use the actual offer duration and mileage
+                            if offer.get('offer_duration_months') and offer.get('offer_total_mileage'):
+                                val = int(offer.get('offer_total_mileage') / (offer.get('offer_duration_months') / 12))
                             else:
                                 val = None
                         elif template_field == 'Total monthly service rate':
@@ -760,7 +758,7 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
     final_report_df.loc[len(final_report_df)] = [''] * len(final_report_df.columns)
     final_report_df.loc[len(final_report_df)] = ['Cost Analysis'] + [''] * (len(final_report_df.columns) - 1)
 
-    cost_data = OfferComparator(offers, {}).calculate_total_costs()
+    cost_data = OfferComparator(offers).calculate_total_costs()
     # Find the order of vendors based on the original offer list for the cost summary
     original_vendor_order = [offer.get('vendor', 'Unknown Vendor') for offer in offer_data_list]
     cost_df = pd.DataFrame(cost_data).set_index('vendor')
