@@ -52,6 +52,7 @@ logger = setup_logging()
 # Currency mapping dictionary for European currencies
 CURRENCY_MAP = {
     'kr.': 'DKK',
+    'kr': 'DKK',
     'dkk': 'DKK',
     '€': 'EUR',
     'eur': 'EUR',
