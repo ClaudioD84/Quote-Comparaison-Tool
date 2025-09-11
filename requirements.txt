@@ -6,3 +6,4 @@ python-dateutil
 xlsxwriter
 requests
 openpyxl
+google-generativeai
