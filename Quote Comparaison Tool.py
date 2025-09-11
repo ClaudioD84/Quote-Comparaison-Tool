@@ -231,9 +231,13 @@ class LLMParser:
         - The `max_duration_months` and `max_total_mileage` refer to the maximum possible contract length and total mileage allowed by the leasing company (e.g., "Max contract: 60 months / 300,000 km").
         - The `offer_duration_months` and `offer_total_mileage` refer to the specific terms of the current offer (e.g., "Current offer: 36 months / 175,000 km").
 
-        2. Calculate the `offer_total_mileage` by multiplying the annual mileage by the duration in months and dividing by 12 if the document states the annual mileage and contract duration. For example, for "35,000 km per year / 48 months", the total mileage is 35000 * 48 / 12 = 140000.
+        2. All extracted price and cost amounts, including `monthly_rental` and `total_monthly_lease`, should be **excluding VAT (Value-Added Tax)**. Look for cues like "excl. VAT", "net price", or similar phrases to identify the correct value.
 
-        3. All extracted price and cost amounts, including `monthly_rental` and `total_monthly_lease`, should be **excluding VAT (Value-Added Tax)**. Look for cues like "excl. VAT", "net price", or similar phrases to identify the correct value.
+        3. Differentiate between the driver and the customer. The `driver_name` is the name of the employee who will use the car. The `customer` is the name of the company that is renting the car. The company name is usually mentioned in the top section of the offer along with the leasing company's name.
+
+        4. For `roadside_assistance`, be flexible and include amounts associated with phrases like "Arval assistance" or "Ayvens assistance" as they represent the same service.
+
+        5. Calculate the `offer_total_mileage` by multiplying the annual mileage by the duration in months and dividing by 12 if the document states the annual mileage and contract duration. For example, for "35,000 km per year / 48 months", the total mileage is 35000 * 48 / 12 = 140000.
 
         Return the data as a JSON object strictly following the provided schema. If a value is not found, use `null` or `false`. Do not make up values.
         """
