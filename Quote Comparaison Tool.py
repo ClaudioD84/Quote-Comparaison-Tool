@@ -145,7 +145,7 @@ class TextProcessor:
             return ""
 
 class LLMParser:
-    """Uses the Gemini LLM to parse PDF text and return structured data."""
+    """Uses the Gemma LLM to parse PDF text and return structured data."""
 
     def __init__(self, api_key: str):
         """Initializes the Gemini client with the provided API key."""
@@ -157,9 +157,9 @@ class LLMParser:
 
     def parse_text(self, text: str, filename: str) -> ParsedOffer:
         """
-        Sends PDF text to the Gemini API for structured data extraction.
+        Sends PDF text to the Gemma API for structured data extraction.
         """
-        logger.info(f"Sending text for parsing to Gemini for file: {filename}")
+        logger.info(f"Sending text for parsing to Gemma for file: {filename}")
 
         # This defines the JSON structure we want the LLM to return
         json_schema = {
@@ -243,8 +243,9 @@ class LLMParser:
         """
 
         # Initialize the model with the system instruction and generation config
+        # CHANGING MODEL FROM gemini-1.5-flash-latest TO gemma-3.27b-it
         model = genai.GenerativeModel(
-            model_name='gemini-1.5-flash-latest', # Using a fast and capable model
+            model_name='gemma-3.27b-it',
             system_instruction=system_instruction,
             generation_config=generation_config
         )
@@ -254,7 +255,7 @@ class LLMParser:
             response = model.generate_content(text)
 
             # The response text should be a valid JSON string
-            logger.info(f"Received raw JSON response from Gemini for {filename}")
+            logger.info(f"Received raw JSON response from Gemma for {filename}")
             extracted_data = json.loads(response.text)
 
             # Ensure lists are initialized as empty lists if they are null
