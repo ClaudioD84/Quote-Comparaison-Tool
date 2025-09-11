@@ -768,48 +768,46 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
     for index, row in template_df.iterrows():
         template_field = row['Field']
         
-        # Skip the Quote number and Winner rows as they are handled separately
+        # Skip fields that are handled separately at the end
         if template_field in ['Quote number', 'Winner']:
             continue
-        
-        # Handle the special cases for 'Equipment' section
-        if template_field == 'Equipment':
-            # Add a blank row for spacing
-            final_report_df_rows.append([''] * (len(vendors) + 1))
-            final_report_df_rows.append(['Equipment'] + [''] * len(vendors))
-            
-            # Combine options and accessories lists
-            all_equipment = []
+
+        # --- START OF NEW AGGREGATION LOGIC ---
+        # Handle the "Additional equipment" row by joining all item names
+        if template_field == 'Additional equipment':
+            new_row = [template_field]
             for offer in offers:
-                equipment_dict = {}
-                for item in offer.options_list + offer.accessories_list:
-                    equipment_dict[item['name']] = item.get('price', None)
-                all_equipment.append(equipment_dict)
+                # Combine names from both options and accessories
+                all_names = [item['name'] for item in offer.options_list + offer.accessories_list]
+                new_row.append(", ".join(all_names))
+            final_report_df_rows.append(new_row)
+            continue # Skip default processing for this row
 
-            # Get a unique, sorted list of all equipment names across all offers
-            all_equipment_names = sorted(list(set(item['name'] for offer in offers for item in offer.options_list + offer.accessories_list)))
-            
-            # Add each unique equipment item to the report
-            for equipment_name in all_equipment_names:
-                equipment_row = [equipment_name]
-                for offer_equipment in all_equipment:
-                    equipment_row.append(offer_equipment.get(equipment_name, None))
-                final_report_df_rows.append(equipment_row)
-            
-            # Add 'Total Options and Accessories' row
-            total_options_row = ['Options (excl. taxes)'] + [offer.options_price for offer in offers]
-            total_accessories_row = ['Accessories (excl. taxes)'] + [offer.accessories_price for offer in offers]
-
-            final_report_df_rows.append(total_options_row)
-            final_report_df_rows.append(total_accessories_row)
-
-            continue # Skip the rest of the loop for this field
+        # Handle the "Additional equipment price" row by summing all item prices
+        if template_field == 'Additional equipment price':
+            new_row = [template_field]
+            for offer in offers:
+                # Combine prices from both lists and sum them up
+                all_prices = [item.get('price', 0) or 0 for item in offer.options_list + offer.accessories_list]
+                total_price = sum(all_prices)
+                # Use the sum of options_price and accessories_price as a fallback
+                if total_price == 0:
+                    total_price = (offer.options_price or 0) + (offer.accessories_price or 0)
+                new_row.append(total_price if total_price > 0 else None)
+            final_report_df_rows.append(new_row)
+            continue # Skip default processing for this row
+        # --- END OF NEW AGGREGATION LOGIC ---
 
         # Add a blank row if the field is a new section header
-        if template_field in ['Driver name', 'Vehicle Description', 'Investment', 'Taxation', 'Duration & Mileage', 'Financial rate', 'Service rate', 'Monthly fee', 'Excess / unused km', 'Total cost']:
+        if template_field in ['Driver name', 'Vehicle Description', 'Investment', 'Taxation', 'Duration & Mileage', 'Financial rate', 'Service rate', 'Monthly fee', 'Excess / unused km', 'Total cost', 'Equipment']:
              final_report_df_rows.append([''] * (len(vendors) + 1))
+        
+        # Add the field title row (e.g., "Equipment" itself)
+        if template_field in ['Equipment']:
+            final_report_df_rows.append([template_field] + [''] * len(vendors))
+            continue
 
-        # Add the field row with values from each offer
+        # Add the field row with values from each offer (default behavior)
         new_row = [template_field]
         for offer in offer_data_list:
             llm_field_name = user_mapping.get(template_field)
@@ -833,9 +831,6 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
                                 offer.get('tyres_cost', 0) or 0
                             ])
                             if val == 0: val = None
-                        elif template_field == 'Total monthly lease ex. VAT':
-                            # This is already a key in the parsed offer
-                            val = offer.get(llm_field_name)
                         else:
                              val = offer.get(llm_field_name)
                 except (ValueError, TypeError):
@@ -848,63 +843,49 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
 
     # Calculate and add the single "Vehicle description correspondence" value and "Gap analysis"
     if len(offers) > 1:
+        # Find the index to insert the new rows after "Accessories (excl. taxes)"
         row_index = final_report_df[final_report_df['Field'] == 'Accessories (excl. taxes)'].index
         if not row_index.empty:
-            insert_idx = row_index[0]
+            insert_idx = row_index[0] + 1
             
-            # Add a blank row
-            final_report_df = pd.concat([final_report_df.iloc[:insert_idx + 1], pd.DataFrame([[''] * (len(vendors) + 1)], columns=final_report_df.columns), final_report_df.iloc[insert_idx + 1:]], ignore_index=True)
-
-            # Then add the correspondence row
-            correspondence_row = ['Vehicle description correspondence']
-            correspondence_row.append('100.0%') # Reference offer is always 100%
+            # Create a list of rows to insert
+            rows_to_insert = [
+                [''] * (len(vendors) + 1),  # Blank row
+                ['Vehicle description correspondence', '100.0%'] + [f"{calculate_similarity_score(reference_offer.vehicle_description, o.vehicle_description):.1f}%" for o in other_offers],
+                [''] * (len(vendors) + 1),  # Blank row
+                ['Gap analysis', 'N/A'] + [get_offer_diff(reference_offer, o) for o in other_offers]
+            ]
             
-            for i, offer in enumerate(other_offers):
-                score = calculate_similarity_score(reference_offer.vehicle_description, offer.vehicle_description)
-                correspondence_row.append(f"{score:.1f}%")
+            # Create a DataFrame for the new rows
+            insert_df = pd.DataFrame(rows_to_insert, columns=final_report_df.columns)
             
-            final_report_df = pd.concat([final_report_df.iloc[:insert_idx + 2], pd.DataFrame([correspondence_row], columns=final_report_df.columns), final_report_df.iloc[insert_idx + 2:]], ignore_index=True)
-            
-            # Add a blank row
-            final_report_df = pd.concat([final_report_df.iloc[:insert_idx + 3], pd.DataFrame([[''] * (len(vendors) + 1)], columns=final_report_df.columns), final_report_df.iloc[insert_idx + 3:]], ignore_index=True)
-
-            # Add Gap analysis row
-            gap_analysis_row = ['Gap analysis']
-            gap_analysis_row.append('N/A')
-            for offer in other_offers:
-                diff_text = get_offer_diff(reference_offer, offer)
-                gap_analysis_row.append(diff_text)
-            
-            final_report_df = pd.concat([final_report_df.iloc[:insert_idx + 4], pd.DataFrame([gap_analysis_row], columns=final_report_df.columns), final_report_df.iloc[insert_idx + 4:]], ignore_index=True)
-
+            # Insert the rows into the main DataFrame
+            final_report_df = pd.concat([
+                final_report_df.iloc[:insert_idx],
+                insert_df,
+                final_report_df.iloc[insert_idx:]
+            ]).reset_index(drop=True)
 
     # Add Cost Analysis Summary at the bottom
     final_report_df.loc[len(final_report_df)] = [''] * len(final_report_df.columns)
     final_report_df.loc[len(final_report_df)] = ['Cost Analysis'] + [''] * (len(final_report_df.columns) - 1)
     
     cost_data = OfferComparator(offers, {}).calculate_total_costs()
-    sorted_offers = pd.DataFrame(cost_data).sort_values('total_contract_cost')
+    # Find the order of vendors based on the original offer list for the cost summary
+    original_vendor_order = [offer.get('vendor', 'Unknown Vendor') for offer in offer_data_list]
+    cost_df = pd.DataFrame(cost_data).set_index('vendor')
+    sorted_cost_df = cost_df.loc[original_vendor_order].reset_index()
+
+    # Determine winner based on the minimum total cost
+    min_cost = sorted_cost_df['total_contract_cost'].min()
     
-    # Add vendor, total cost, and monthly cost rows
-    vendor_row = ['Vendor'] + [row['vendor'] for _, row in sorted_offers.iterrows()]
-    total_cost_row = ['Total Cost'] + [f"{row['total_contract_cost']:,.2f}" for _, row in sorted_offers.iterrows()]
-    monthly_cost_row = ['Monthly Cost'] + [f"{row['cost_per_month']:,.2f}" for _, row in sorted_offers.iterrows()]
-    winner_row = ['Winner'] + ["🥇 Winner" if index == sorted_offers.index[0] else "" for index, _ in sorted_offers.iterrows()]
+    total_cost_row = ['Total Cost'] + [row['total_contract_cost'] for _, row in sorted_cost_df.iterrows()]
+    monthly_cost_row = ['Monthly Cost'] + [row['cost_per_month'] for _, row in sorted_cost_df.iterrows()]
+    winner_row = ['Winner'] + ["🥇 Winner" if row['total_contract_cost'] == min_cost else "" for _, row in sorted_cost_df.iterrows()]
 
-    # Pad all rows to ensure they have the same length as the DataFrame columns
-    num_cols = len(final_report_df.columns)
-    vendor_row += [''] * (num_cols - len(vendor_row))
-    total_cost_row += [''] * (num_cols - len(total_cost_row))
-    monthly_cost_row += [''] * (num_cols - len(monthly_cost_row))
-    winner_row += [''] * (num_cols - len(winner_row))
-
-    final_report_df = pd.concat([
-        final_report_df,
-        pd.DataFrame([vendor_row], columns=final_report_df.columns),
-        pd.DataFrame([total_cost_row], columns=final_report_df.columns),
-        pd.DataFrame([monthly_cost_row], columns=final_report_df.columns),
-        pd.DataFrame([winner_row], columns=final_report_df.columns)
-    ], ignore_index=True)
+    summary_df = pd.DataFrame([total_cost_row, monthly_cost_row, winner_row], columns=final_report_df.columns)
+    
+    final_report_df = pd.concat([final_report_df, summary_df], ignore_index=True)
 
     # Use a BytesIO buffer to save the Excel file in memory
     buffer = io.BytesIO()
@@ -913,59 +894,41 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
         workbook = writer.book
         worksheet = writer.sheets['Quotation']
         
-        # Define a bold and colored format for #87E990
-        bold_and_colored_format = workbook.add_format({'bold': True, 'bg_color': '#87E990'})
-        
         bold_format = workbook.add_format({'bold': True})
+        winner_format = workbook.add_format({'bold': True, 'bg_color': '#87E990'})
+        wrap_format = workbook.add_format({'text_wrap': True, 'valign': 'top'})
+
+        # Find the column index of the winning offer
+        winner_col_idx = -1
+        for i, val in enumerate(winner_row):
+            if val == "🥇 Winner":
+                winner_col_idx = i
+                break
         
-        # Define a format for the 'Gap analysis' row with text wrap
-        wrap_format = workbook.add_format({'text_wrap': True})
-
         # Apply formatting
-        for row_idx, row in enumerate(final_report_df.values):
-            # Bold and color the field name and its corresponding value
-            if row[0] in ['Leasing company', 'Driver name', 'Vehicle Description', 'Vehicle description correspondence']:
-                worksheet.write(row_idx, 0, row[0], bold_format)
-                for col_idx in range(1, len(row)):
-                    worksheet.write(row_idx, col_idx, row[col_idx], bold_and_colored_format)
+        for r_idx, row in enumerate(final_report_df.values):
+            field_name = str(row[0])
             
-            # Highlight winner and corresponding monthly cost
-            if '🥇 Winner' in row:
-                winner_col_idx = list(row).index('🥇 Winner')
-                
-                # Highlight the Winner row cell with color
-                worksheet.write(row_idx, winner_col_idx, row[winner_col_idx], bold_and_colored_format)
+            # Bold section headers
+            if field_name in ['Leasing company', 'Driver name', 'Vehicle Description', 'Investment', 'Taxation', 'Duration & Mileage', 'Financial rate', 'Service rate', 'Monthly fee', 'Excess / unused km', 'Equipment', 'Cost Analysis', 'Gap analysis', 'Vehicle description correspondence']:
+                worksheet.write(r_idx, 0, field_name, bold_format)
+            
+            # Apply text wrapping for Gap Analysis and aggregated equipment names
+            if field_name in ['Gap analysis', 'Additional equipment']:
+                for c_idx in range(1, len(row)):
+                    worksheet.write(r_idx, c_idx, row[c_idx], wrap_format)
+            
+            # Highlight the entire winning column in the summary
+            if winner_col_idx != -1:
+                if field_name in ['Total Cost', 'Monthly Cost', 'Winner']:
+                    worksheet.write(r_idx, winner_col_idx, row[winner_col_idx], winner_format)
+                    # Also highlight the winning vendor in the first row of the report
+                    worksheet.write(0, winner_col_idx, final_report_df.iloc[0, winner_col_idx], winner_format)
 
-                # Find the 'Monthly Cost' row and highlight it with color
-                monthly_cost_row_idx = final_report_df[final_report_df['Field'] == 'Monthly Cost'].index[0]
-                winning_monthly_cost = final_report_df.iloc[monthly_cost_row_idx, winner_col_idx]
-                worksheet.write(monthly_cost_row_idx, winner_col_idx, winning_monthly_cost, bold_and_colored_format)
-                
-                # Highlight 'Vendor' and 'Total Cost' in the winning column with the new color #87E990
-                vendor_row_idx = final_report_df[final_report_df['Field'] == 'Vendor'].index[0]
-                total_cost_row_idx = final_report_df[final_report_df['Field'] == 'Total Cost'].index[0]
-
-                winning_vendor = final_report_df.iloc[vendor_row_idx, winner_col_idx]
-                winning_total_cost = final_report_df.iloc[total_cost_row_idx, winner_col_idx]
-                
-                worksheet.write(vendor_row_idx, winner_col_idx, winning_vendor, bold_and_colored_format)
-                worksheet.write(total_cost_row_idx, winner_col_idx, winning_total_cost, bold_and_colored_format)
-                
-            # Apply wrap text format to 'Gap analysis' and 'Additional equipment' rows
-            if row[0] in ['Gap analysis', 'Additional equipment']:
-                target_row_idx = final_report_df[final_report_df['Field'] == row[0]].index[0]
-                for col_idx in range(1, len(row)):
-                    worksheet.write(target_row_idx, col_idx, final_report_df.iloc[target_row_idx, col_idx], wrap_format)
-
-        # Fix column widths to prevent the wrapped text from making them too wide
-        for i, col in enumerate(final_report_df.columns):
-            if i > 0:
-                # Set a fixed, reasonable width for the offer columns
-                worksheet.set_column(i, i, 50)
-            else:
-                # Autofit the 'Field' column
-                max_len = final_report_df[col].astype(str).map(len).max()
-                worksheet.set_column(i, i, max_len + 2)
+        # Set column widths
+        worksheet.set_column(0, 0, 40) # Field column
+        for i in range(1, len(final_report_df.columns)):
+            worksheet.set_column(i, i, 25) # Offer columns
             
     buffer.seek(0)
     return buffer
