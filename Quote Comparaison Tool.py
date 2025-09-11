@@ -342,7 +342,7 @@ def main():
     # --- API Key Input ---
     # The recommended way is to enter the key in the sidebar.
     # For local testing, you can uncomment and replace the line below.
-    # api_key = AIzaSyD07ltM6lxSsD0065ft2SU7JHnnW8yhq54
+    # api_key = "api_key"
     api_key = st.sidebar.text_input(
         "Enter your Google AI API Key",
         type="password",
