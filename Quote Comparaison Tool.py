@@ -351,7 +351,7 @@ def main():
 
     # Sidebar for configuration
     st.sidebar.header("⚙️ Configuration & Review")
-    
+
     # --- API Key Input ---
     # The recommended way is to enter the key in the sidebar.
     # For local testing, you can uncomment and replace the line below.
@@ -379,19 +379,151 @@ def main():
         help="Upload the other PDF files you want to compare against the reference offer"
     )
 
-    if reference_file and other_files:
-        if len(other_files) >= 1:
-            # Check for API Key before processing
+    # --- New Logic: Run parsing only on file upload and cache the results ---
+    if reference_file or other_files:
+        uploaded_files = [reference_file] + other_files
+        current_file_names = [f.name for f in uploaded_files if f is not None]
+
+        # Check if files have changed since the last run
+        if 'offers' not in st.session_state or st.session_state.get('uploaded_files') != current_file_names:
             if not api_key:
                 st.error("❌ Please enter your Google AI API Key in the sidebar to proceed.")
                 st.stop()
 
-            uploaded_files = [reference_file] + other_files
+            # Process the files and store the results in session state
+            st.session_state.offers = process_offers_internal(api_key, uploaded_files)
+            st.session_state.uploaded_files = current_file_names
+
+        if st.session_state.offers:
+            display_parsing_results(st.session_state.offers)
+
+    # --- End of New Logic ---
+
+    # User-editable mapping section
+    st.sidebar.subheader("Review AI-Suggested Mappings")
+    st.sidebar.markdown("Review the AI's guesses for each field. You can edit them if needed.")
+
+    # Create a dynamic mapping dictionary with initial AI guesses
+    mapping_suggestions = defaultdict(str)
+
+    # These are hardcoded for now, but in a real app would be dynamic
+    mapping_suggestions['Quote number'] = 'quote_number'
+    mapping_suggestions['Driver name'] = 'driver_name'
+    mapping_suggestions['Vehicle Description'] = 'vehicle_description'
+    mapping_suggestions['Manufacturer'] = 'manufacturer'
+    mapping_suggestions['Model'] = 'model'
+    mapping_suggestions['Version'] = 'version'
+    mapping_suggestions['JATO code'] = 'jato_code'
+    mapping_suggestions['Fuel type'] = 'fuel_type'
+    mapping_suggestions['No. doors'] = 'num_doors'
+    mapping_suggestions['HP'] = 'hp'
+    mapping_suggestions['C02 emission WLTP (g/km)'] = 'c02_emission'
+    mapping_suggestions['Battery range'] = 'battery_range'
+    mapping_suggestions['Vehicle list price (excl. VAT, excl. options)'] = 'vehicle_price'
+    mapping_suggestions['Options (excl. taxes)'] = 'options_price'
+    mapping_suggestions['Accessories (excl. taxes)'] = 'accessories_price'
+    mapping_suggestions['Delivery cost'] = 'delivery_cost'
+    mapping_suggestions['Registration tax'] = 'registration_tax'
+    mapping_suggestions['Total net investment'] = 'total_net_investment'
+    mapping_suggestions['Taxation'] = 'taxation'
+    mapping_suggestions['Taxation value'] = 'taxation_value'
+    # Map 'Term (months)' to the actual offer duration
+    mapping_suggestions['Term (months)'] = 'offer_duration_months'
+    # Map 'Mileage per year (in km)' to the actual offer mileage
+    mapping_suggestions['Mileage per year (in km)'] = 'offer_total_mileage'
+    mapping_suggestions['Financial rate'] = 'financial_rate'
+    mapping_suggestions['Monthly financial rate (depreciation + interest)'] = 'depreciation_interest'
+    mapping_suggestions['Maintenance & repair'] = 'maintenance_repair'
+    mapping_suggestions['Insurance'] = 'insurance_cost'
+    mapping_suggestions['Green tax*'] = 'green_tax'
+    mapping_suggestions['Management fee'] = 'management_fee'
+    mapping_suggestions['Tyres (summer and winter)'] = 'tyres_cost'
+    mapping_suggestions['Road side assistance'] = 'roadside_assistance'
+    mapping_suggestions['Total monthly service rate'] = 'total_monthly_service_rate'
+    mapping_suggestions['Total monthly lease ex. VAT'] = 'total_monthly_lease'
+    mapping_suggestions['Excess kilometers'] = 'excess_mileage_rate'
+    mapping_suggestions['Unused kilometers'] = 'unused_mileage_rate'
+
+    user_mapping = {}
+    with st.sidebar.expander("📝 Field Mappings"):
+        for template_field, suggested_llm_field in mapping_suggestions.items():
+            user_mapping[template_field] = st.text_input(
+                f"Map '{template_field}' to which LLM field?",
+                value=suggested_llm_field,
+                key=f"map_{template_field}"
+            )
+
+    if st.button("Generate Report", help="Click to generate the final Excel report"):
+        # Retrieve offers from session state instead of re-parsing
+        offers = st.session_state.get('offers')
+        if not offers:
+            st.error("❌ No offers found. Please upload files first.")
+            return
+
+        comparator = OfferComparator(offers)
+        is_valid, errors = comparator.validate_offers()
+
+        if not is_valid:
+            st.error("❌ Validation Errors: Offers cannot be compared due to inconsistencies.")
+            for error in errors:
+                st.error(f"• {error}")
+            return
+
+        try:
             template_buffer = create_default_template()
-            # Pass the api_key to the processing function
-            process_offers(api_key, template_buffer, uploaded_files)
-        else:
-            st.warning("⚠️ Please upload at least one other PDF file for comparison")
+            excel_buffer = generate_excel_report(offers, template_buffer, user_mapping)
+
+            # Use consolidated customer and driver names for file naming only
+            common_customer, common_driver = consolidate_names(offers)
+            customer_name = common_customer if common_customer else "Customer"
+            driver_name = common_driver if common_driver else "Driver"
+            file_name = f"{customer_name}_{driver_name}".replace(" ", "_")
+
+            st.download_button(
+                label="⬇️ Download Excel Report",
+                data=excel_buffer,
+                file_name=f"{file_name}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        except Exception as e:
+            st.error(f"❌ Error generating Excel report: {str(e)}")
+            logger.error(f"Excel generation error: {e}\n{traceback.format_exc()}")
+
+def process_offers_internal(api_key: str, uploaded_files) -> List[ParsedOffer]:
+    """Helper function to process offers and return the list of parsed objects."""
+    try:
+        parser = LLMParser(api_key=api_key)
+    except ValueError as e:
+        st.error(f"❌ Initialization Error: {e}")
+        return []
+
+    offers = []
+
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+
+    for i, uploaded_file in enumerate(uploaded_files):
+        if uploaded_file is None:
+            continue
+        status_text.text(f"Processing {uploaded_file.name} with AI...")
+        try:
+            pdf_bytes = uploaded_file.read()
+            raw_text = TextProcessor.extract_text_from_pdf(pdf_bytes)
+            offer = parser.parse_text(raw_text, uploaded_file.name)
+            offers.append(offer)
+        except Exception as e:
+            st.error(f"❌ Error processing {uploaded_file.name}: {str(e)}")
+            logger.error(f"File processing error: {e}\n{traceback.format_exc()}")
+        progress_bar.progress((i + 1) / len(uploaded_files))
+
+    status_text.text("AI parsing complete!")
+    progress_bar.empty()
+
+    if not offers or not any(o.parsing_confidence > 0 for o in offers):
+        st.error("❌ No offers could be processed successfully. Please check the file format or API key.")
+        return []
+
+    return offers
 
 
 def create_default_template() -> io.BytesIO:
@@ -486,123 +618,6 @@ def get_offer_diff(offer1: ParsedOffer, offer2: ParsedOffer) -> str:
             diff_summary.append(f"• {field}: {val1_str} vs {val2_str}")
 
     return "\n".join(diff_summary) if diff_summary else "No significant differences found."
-
-def process_offers(api_key: str, template_buffer, uploaded_files):
-    """Process uploaded offers and generate comparison"""
-    try:
-        parser = LLMParser(api_key=api_key)
-    except ValueError as e:
-        st.error(f"❌ Initialization Error: {e}")
-        return
-
-    offers = []
-
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-
-    for i, uploaded_file in enumerate(uploaded_files):
-        status_text.text(f"Processing {uploaded_file.name} with AI...")
-        try:
-            pdf_bytes = uploaded_file.read()
-            raw_text = TextProcessor.extract_text_from_pdf(pdf_bytes)
-            offer = parser.parse_text(raw_text, uploaded_file.name)
-            offers.append(offer)
-        except Exception as e:
-            st.error(f"❌ Error processing {uploaded_file.name}: {str(e)}")
-            logger.error(f"File processing error: {e}\n{traceback.format_exc()}")
-        progress_bar.progress((i + 1) / len(uploaded_files))
-
-    status_text.text("AI parsing complete!")
-    progress_bar.empty()
-
-    if not offers or not any(o.parsing_confidence > 0 for o in offers):
-        st.error("❌ No offers could be processed successfully. Please check the file format or API key.")
-        return
-
-    display_parsing_results(offers)
-
-    # User-editable mapping section
-    st.sidebar.subheader("Review AI-Suggested Mappings")
-    st.sidebar.markdown("Review the AI's guesses for each field. You can edit them if needed.")
-
-    # Create a dynamic mapping dictionary with initial AI guesses
-    mapping_suggestions = defaultdict(str)
-
-    # These are hardcoded for now, but in a real app would be dynamic
-    mapping_suggestions['Quote number'] = 'quote_number'
-    mapping_suggestions['Driver name'] = 'driver_name'
-    mapping_suggestions['Vehicle Description'] = 'vehicle_description'
-    mapping_suggestions['Manufacturer'] = 'manufacturer'
-    mapping_suggestions['Model'] = 'model'
-    mapping_suggestions['Version'] = 'version'
-    mapping_suggestions['JATO code'] = 'jato_code'
-    mapping_suggestions['Fuel type'] = 'fuel_type'
-    mapping_suggestions['No. doors'] = 'num_doors'
-    mapping_suggestions['HP'] = 'hp'
-    mapping_suggestions['C02 emission WLTP (g/km)'] = 'c02_emission'
-    mapping_suggestions['Battery range'] = 'battery_range'
-    mapping_suggestions['Vehicle list price (excl. VAT, excl. options)'] = 'vehicle_price'
-    mapping_suggestions['Options (excl. taxes)'] = 'options_price'
-    mapping_suggestions['Accessories (excl. taxes)'] = 'accessories_price'
-    mapping_suggestions['Delivery cost'] = 'delivery_cost'
-    mapping_suggestions['Registration tax'] = 'registration_tax'
-    mapping_suggestions['Total net investment'] = 'total_net_investment'
-    mapping_suggestions['Taxation'] = 'taxation'
-    mapping_suggestions['Taxation value'] = 'taxation_value'
-    # Map 'Term (months)' to the actual offer duration
-    mapping_suggestions['Term (months)'] = 'offer_duration_months'
-    # Map 'Mileage per year (in km)' to the actual offer mileage
-    mapping_suggestions['Mileage per year (in km)'] = 'offer_total_mileage'
-    mapping_suggestions['Financial rate'] = 'financial_rate'
-    mapping_suggestions['Monthly financial rate (depreciation + interest)'] = 'depreciation_interest'
-    mapping_suggestions['Maintenance & repair'] = 'maintenance_repair'
-    mapping_suggestions['Insurance'] = 'insurance_cost'
-    mapping_suggestions['Green tax*'] = 'green_tax'
-    mapping_suggestions['Management fee'] = 'management_fee'
-    mapping_suggestions['Tyres (summer and winter)'] = 'tyres_cost'
-    mapping_suggestions['Roadside assistance'] = 'roadside_assistance'
-    mapping_suggestions['Total monthly service rate'] = 'total_monthly_service_rate'
-    mapping_suggestions['Total monthly lease ex. VAT'] = 'total_monthly_lease'
-    mapping_suggestions['Excess kilometers'] = 'excess_mileage_rate'
-    mapping_suggestions['Unused kilometers'] = 'unused_mileage_rate'
-
-    user_mapping = {}
-    with st.sidebar.expander("📝 Field Mappings"):
-        for template_field, suggested_llm_field in mapping_suggestions.items():
-            user_mapping[template_field] = st.text_input(
-                f"Map '{template_field}' to which LLM field?",
-                value=suggested_llm_field,
-                key=f"map_{template_field}"
-            )
-
-    if st.button("Generate Report", help="Click to generate the final Excel report"):
-        comparator = OfferComparator(offers)
-        is_valid, errors = comparator.validate_offers()
-
-        if not is_valid:
-            st.error("❌ Validation Errors: Offers cannot be compared due to inconsistencies.")
-            for error in errors:
-                st.error(f"• {error}")
-            return
-
-        try:
-            excel_buffer = generate_excel_report(offers, template_buffer, user_mapping)
-
-            # Use consolidated customer and driver names for file naming only
-            common_customer, common_driver = consolidate_names(offers)
-            customer_name = common_customer if common_customer else "Customer"
-            driver_name = common_driver if common_driver else "Driver"
-            file_name = f"{customer_name}_{driver_name}".replace(" ", "_")
-
-            st.download_button(
-                label="⬇️ Download Excel Report",
-                data=excel_buffer,
-                file_name=f"{file_name}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-        except Exception as e:
-            st.error(f"❌ Error generating Excel report: {str(e)}")
-            logger.error(f"Excel generation error: {e}\n{traceback.format_exc()}")
 
 def consolidate_names(offers: List[ParsedOffer]) -> Tuple[str, str]:
     """Consolidate customer and driver names from a list of parsed offers."""
