@@ -211,19 +211,19 @@ class LLMParser:
                 "driver_name": {"type": "STRING"},
                 "customer": {"type": "STRING"},
                 "options_list": {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {"name": {"type": "STRING"}, "price": {"type": "NUMBER"}}}},
-                "accessories_list": {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {"name": {"type": "STRING"}, "price": {"type": "NUMBER"}}}}
+                "accessories_list": {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {"name": {"type": "STRING"}, "price": {"type": "NUMBER"}}}},
+                # "total_monthly_service_rate": {"type": "NUMBER", "description": "Sum of all service-related costs like maintenance, tyres, etc."},
+                # "total_contract_cost": {"type": "NUMBER", "description": "Total cost over the full contract duration, including upfront costs."},
+                # "cost_per_month": {"type": "NUMBER"},
+                # "cost_per_km": {"type": "NUMBER"},
+                # "excess_kilometers": {"type": "NUMBER", "description": "Rate for exceeding agreed mileage, per km."},
+                # "unused_kilometers": {"type": "NUMBER", "description": "Rate for unused mileage, per km."}
             }
         }
-
-        # Configure the generation settings to force JSON output
-        generation_config = genai.types.GenerationConfig(
-            response_mime_type="application/json",
-            response_schema=json_schema
-        )
-
+        
         # The system instruction now explicitly asks for two sets of values and clarifies mileage calculation
         # and specifies that all amounts should be excl. VAT unless otherwise specified
-        system_instruction = """
+        prompt_instruction = """
         You are a world-class financial analyst specializing in fleet leasing. Your task is to extract key data points from a vehicle leasing contract, regardless of the language or format.
 
         IMPORTANT:
@@ -240,19 +240,27 @@ class LLMParser:
         5. Calculate the `offer_total_mileage` by multiplying the annual mileage by the duration in months and dividing by 12 if the document states the annual mileage and contract duration. For example, for "35,000 km per year / 48 months", the total mileage is 35000 * 48 / 12 = 140000.
 
         Return the data as a JSON object strictly following the provided schema. If a value is not found, use `null` or `false`. Do not make up values.
+
+        HERE IS THE DOCUMENT TEXT TO PARSE:
         """
 
-        # Initialize the model with the system instruction and generation config
-        # CHANGING MODEL FROM gemini-1.5-flash-latest TO gemma-3.27b-it
+        full_prompt = prompt_instruction + text
+        
+        # Configure the generation settings to force JSON output
+        generation_config = genai.types.GenerationConfig(
+            response_mime_type="application/json",
+            response_schema=json_schema
+        )
+
+        # CHANGING MODEL FROM gemini-1.5-flash-latest TO gemma-3-27b-it
         model = genai.GenerativeModel(
             model_name='gemma-3-27b-it',
-            system_instruction=system_instruction,
             generation_config=generation_config
         )
 
         try:
-            # Make the API call
-            response = model.generate_content(text)
+            # Make the API call with the combined prompt
+            response = model.generate_content(full_prompt)
 
             # The response text should be a valid JSON string
             logger.info(f"Received raw JSON response from Gemma for {filename}")
