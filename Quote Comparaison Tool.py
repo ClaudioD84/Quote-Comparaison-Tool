@@ -113,8 +113,9 @@ class ParsedOffer:
     insurance_cost: Optional[float] = None
     green_tax: Optional[float] = None
     management_fee: Optional[float] = None
-    tyres_cost: Optional[float] = None
+    # The LLM should be flexible enough to recognize "Arval Assistance", etc.
     roadside_assistance: Optional[float] = None
+    tyres_cost: Optional[float] = None
     total_monthly_lease: Optional[float] = None
     driver_name: Optional[str] = None
     customer: Optional[str] = None
@@ -221,14 +222,18 @@ class LLMParser:
         )
 
         # The system instruction now explicitly asks for two sets of values and clarifies mileage calculation
+        # and specifies that all amounts should be excl. VAT unless otherwise specified
         system_instruction = """
         You are a world-class financial analyst specializing in fleet leasing. Your task is to extract key data points from a vehicle leasing contract, regardless of the language or format.
 
-        IMPORTANT: Distinguish between the **maximum allowed** contract terms and the **actual terms of the offer**.
+        IMPORTANT:
+        1. Distinguish between the **maximum allowed** contract terms and the **actual terms of the offer**.
         - The `max_duration_months` and `max_total_mileage` refer to the maximum possible contract length and total mileage allowed by the leasing company (e.g., "Max contract: 60 months / 300,000 km").
         - The `offer_duration_months` and `offer_total_mileage` refer to the specific terms of the current offer (e.g., "Current offer: 36 months / 175,000 km").
 
-        If the document states the annual mileage and contract duration, calculate the `offer_total_mileage` by multiplying the annual mileage by the duration in months and dividing by 12. For example, for "35,000 km per year / 48 months", the total mileage is 35000 * 48 / 12 = 140000.
+        2. Calculate the `offer_total_mileage` by multiplying the annual mileage by the duration in months and dividing by 12 if the document states the annual mileage and contract duration. For example, for "35,000 km per year / 48 months", the total mileage is 35000 * 48 / 12 = 140000.
+
+        3. All extracted price and cost amounts, including `monthly_rental` and `total_monthly_lease`, should be **excluding VAT (Value-Added Tax)**. Look for cues like "excl. VAT", "net price", or similar phrases to identify the correct value.
 
         Return the data as a JSON object strictly following the provided schema. If a value is not found, use `null` or `false`. Do not make up values.
         """
