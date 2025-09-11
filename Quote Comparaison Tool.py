@@ -239,16 +239,10 @@ class LLMParser:
             }
         }
 
-        # Configure the generation settings to force JSON output
-        generation_config = genai.types.GenerationConfig(
-            response_mime_type="application/json",
-            response_schema=json_schema
-        )
-        
-        # The model call no longer includes a system instruction
+        # Removed generation_config to fix JSON mode error.
+        # Now, the model must be prompted to produce the JSON format directly.
         model = genai.GenerativeModel(
-            model_name='models/gemma-3-27b-it',
-            generation_config=generation_config
+            model_name='models/gemma-3-27b-it'
         )
 
         try:
@@ -575,7 +569,7 @@ def calculate_similarity_score(s1: str, s2: str) -> float:
     return matcher.ratio() * 100
 
 def get_offer_diff(offer1: ParsedOffer, offer2: ParsedOffer) -> str:
-    """Compares two ParsedOffer objects and returns a string summarizing the differences."""
+    """Comparares two ParsedOffer objects and returns a string summarizing the differences."""
     diff_summary = []
 
     # List of key fields to compare, excluding the ones to ignore
