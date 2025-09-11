@@ -260,20 +260,31 @@ class OfferComparator:
             errors.append("Need at least 2 offers for comparison")
             return False, errors
 
+        # --- FIX: Use normalize_currency here ---
         normalized_currencies = [normalize_currency(o.currency) for o in self.offers if o.currency]
         if len(set(normalized_currencies)) > 1:
             errors.append(f"Mixed currencies detected: {set(normalized_currencies)}")
 
         durations = [o.duration_months for o in self.offers if o.duration_months]
         mileages = [o.total_mileage for o in self.offers if o.total_mileage]
+        
         if len(durations) != len(self.offers) or None in durations:
             errors.append("Some offers are missing contract duration.")
         elif len(set(durations)) > 1:
             errors.append(f"Contract durations don't match: {set(durations)}")
+
         if len(mileages) != len(self.offers) or None in mileages:
             errors.append("Some offers are missing mileage information.")
+        # --- FIX: Add mileage tolerance check ---
         elif len(set(mileages)) > 1:
-            errors.append(f"Contract mileages don't match: {set(mileages)}")
+            reference_mileage = self.offers[0].total_mileage
+            mileage_tolerance = self.config.get('mileage_tolerance_percent', 10) / 100.0  # Default to 10%
+            is_consistent = all(
+                abs(m - reference_mileage) / reference_mileage <= mileage_tolerance
+                for m in mileages
+            )
+            if not is_consistent:
+                errors.append(f"Contract mileages don't match: {set(mileages)}")
 
         return len(errors) == 0, errors
 
@@ -331,6 +342,15 @@ def main():
         type="password",
         help="Get your API key from Google AI Studio. For deployed apps, use st.secrets."
     )
+    
+    # --- Mileage Tolerance Input ---
+    mileage_tolerance = st.sidebar.number_input(
+        "Mileage Tolerance (%)",
+        min_value=0,
+        max_value=100,
+        value=10,
+        help="Allowed percentage difference in total mileage for comparison."
+    )
 
     # File upload
     st.header("📁 Upload Offers")
@@ -359,7 +379,7 @@ def main():
             uploaded_files = [reference_file] + other_files
             template_buffer = create_default_template()
             # Pass the api_key to the processing function
-            process_offers(api_key, template_buffer, uploaded_files)
+            process_offers(api_key, template_buffer, uploaded_files, {'mileage_tolerance_percent': mileage_tolerance})
         else:
             st.warning("⚠️ Please upload at least one other PDF file for comparison")
 
@@ -456,7 +476,7 @@ def get_offer_diff(offer1: ParsedOffer, offer2: ParsedOffer) -> str:
 
     return "\n".join(diff_summary) if diff_summary else "No significant differences found."
 
-def process_offers(api_key: str, template_buffer, uploaded_files):
+def process_offers(api_key: str, template_buffer, uploaded_files, config: Dict[str, Any]):
     """Process uploaded offers and generate comparison"""
     try:
         parser = LLMParser(api_key=api_key)
@@ -543,7 +563,7 @@ def process_offers(api_key: str, template_buffer, uploaded_files):
             )
 
     if st.button("Generate Report", help="Click to generate the final Excel report"):
-        comparator = OfferComparator(offers, {})
+        comparator = OfferComparator(offers, config) # Pass config here
         is_valid, errors = comparator.validate_offers()
 
         if not is_valid:
@@ -683,7 +703,11 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
                     if llm_field_name in offer:
                         if template_field == 'Mileage per year (in km)':
                             if offer.get('duration_months') and offer.get('total_mileage'):
-                                val = int(offer.get('total_mileage') / (offer.get('duration_months') / 12))
+                                # Fix: Handle potential division by zero
+                                if offer.get('duration_months') > 0:
+                                    val = int(offer.get('total_mileage') / (offer.get('duration_months') / 12))
+                                else:
+                                    val = None
                             else:
                                 val = None
                         elif template_field == 'Total monthly service rate':
