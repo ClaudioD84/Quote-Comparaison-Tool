@@ -3,11 +3,10 @@ AI-Powered Fleet Leasing Offer Comparator - Streamlit App
 This version uses a Large Language Model (LLM) to intelligently parse PDF content.
 Author: Fleet Management Tool
 Requirements:
-  streamlit, pandas, numpy, pdfplumber, python-dateutil, xlsxwriter
+  streamlit, pandas, numpy, pdfplumber, python-dateutil, xlsxwriter, google-generativeai
 Notes:
-  - This version uses a mock API call to demonstrate the LLM functionality.
-  - You can replace the mock logic with a real API call to a service like Gemini.
-  - The LLM can handle various languages and formats without needing specific regex rules.
+  - This version uses a real API call to the Google Gemini API.
+  - You must provide a valid API key to use the parsing functionality.
 """
 
 import io
@@ -33,6 +32,7 @@ from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.styles import Font
 import xlsxwriter
+import google.generativeai as genai
 
 # Configure logging
 @st.cache_resource
@@ -83,7 +83,7 @@ class ParsedOffer:
     currency: Optional[str] = None
     parsing_confidence: float = 0.0
     warnings: List[str] = field(default_factory=list)
-    
+
     # New fields to support the extended functionality
     quote_number: Optional[str] = None
     manufacturer: Optional[str] = None
@@ -125,7 +125,7 @@ def normalize_currency(currency_str: Optional[str]) -> Optional[str]:
 
 class TextProcessor:
     """Handles text extraction and normalization"""
-    
+
     @staticmethod
     def extract_text_from_pdf(pdf_bytes: bytes) -> str:
         """Extract text from PDF, returning a single string."""
@@ -139,257 +139,127 @@ class TextProcessor:
             return ""
 
 class LLMParser:
-    """Uses an LLM to parse PDF text and return structured data."""
+    """Uses the Gemini LLM to parse PDF text and return structured data."""
 
     def __init__(self, api_key: str):
+        """Initializes the Gemini client with the provided API key."""
+        if not api_key:
+            raise ValueError("An API key for the Gemini API is required.")
         self.api_key = api_key
-        # Use a mock endpoint for demonstration
-        self.api_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent"
+        genai.configure(api_key=self.api_key)
+        logger.info("Gemini client configured successfully.")
 
     def parse_text(self, text: str, filename: str) -> ParsedOffer:
         """
-        Sends PDF text to the LLM for structured data extraction.
-        Note: This is a mock implementation. For a real app, replace this with a `fetch` call.
+        Sends PDF text to the Gemini API for structured data extraction.
         """
-        logger.info(f"Sending text for parsing to LLM for file: {filename}")
-        
-        # This is a sample of what the payload to the Gemini API would look like
-        payload = {
-            "contents": [{
-                "parts": [{"text": text}]
-            }],
-            "systemInstruction": {
-                "parts": [{
-                    "text": "You are a world-class financial analyst. Your task is to extract key data points from a vehicle leasing contract, regardless of the language or format. Return the data as a JSON object strictly following the provided schema. If a value is not found, use `null` or `false`."
-                }]
-            },
-            "generationConfig": {
-                "responseMimeType": "application/json",
-                "responseSchema": {
-                    "type": "OBJECT",
-                    "properties": {
-                        "vendor": {"type": "STRING"},
-                        "vehicle_description": {"type": "STRING"},
-                        "duration_months": {"type": "NUMBER"},
-                        "total_mileage": {"type": "NUMBER"},
-                        "monthly_rental": {"type": "NUMBER"},
-                        "upfront_costs": {"type": "NUMBER"},
-                        "deposit": {"type": "NUMBER"},
-                        "admin_fees": {"type": "NUMBER"},
-                        "maintenance_included": {"type": "BOOLEAN"},
-                        "excess_mileage_rate": {"type": "NUMBER"},
-                        "unused_mileage_rate": {"type": "NUMBER"},
-                        "currency": {"type": "STRING"},
-                        "parsing_confidence": {"type": "NUMBER"},
-                        "warnings": {"type": "ARRAY", "items": {"type": "STRING"}},
-                        "quote_number": {"type": "STRING"},
-                        "manufacturer": {"type": "STRING"},
-                        "model": {"type": "STRING"},
-                        "version": {"type": "STRING"},
-                        "jato_code": {"type": "STRING"},
-                        "fuel_type": {"type": "STRING"},
-                        "num_doors": {"type": "NUMBER"},
-                        "hp": {"type": "NUMBER"},
-                        "c02_emission": {"type": "NUMBER"},
-                        "battery_range": {"type": "NUMBER"},
-                        "vehicle_price": {"type": "NUMBER"},
-                        "options_price": {"type": "NUMBER"},
-                        "accessories_price": {"type": "NUMBER"},
-                        "delivery_cost": {"type": "NUMBER"},
-                        "registration_tax": {"type": "NUMBER"},
-                        "total_net_investment": {"type": "NUMBER"},
-                        "taxation_value": {"type": "NUMBER"},
-                        "financial_rate": {"type": "NUMBER"},
-                        "depreciation_interest": {"type": "NUMBER"},
-                        "maintenance_repair": {"type": "NUMBER"},
-                        "insurance_cost": {"type": "NUMBER"},
-                        "green_tax": {"type": "NUMBER"},
-                        "management_fee": {"type": "NUMBER"},
-                        "tyres_cost": {"type": "NUMBER"},
-                        "roadside_assistance": {"type": "NUMBER"},
-                        "total_monthly_lease": {"type": "NUMBER"},
-                        "driver_name": {"type": "STRING"},
-                        "customer": {"type": "STRING"},
-                        "options_list": {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {"name": {"type": "STRING"}, "price": {"type": "NUMBER"}}}},
-                        "accessories_list": {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {"name": {"type": "STRING"}, "price": {"type": "NUMBER"}}}}
-                    }
-                }
+        logger.info(f"Sending text for parsing to Gemini for file: {filename}")
+
+        # This defines the JSON structure we want the LLM to return
+        json_schema = {
+            "type": "OBJECT",
+            "properties": {
+                "vendor": {"type": "STRING"},
+                "vehicle_description": {"type": "STRING"},
+                "duration_months": {"type": "NUMBER"},
+                "total_mileage": {"type": "NUMBER"},
+                "monthly_rental": {"type": "NUMBER"},
+                "upfront_costs": {"type": "NUMBER"},
+                "deposit": {"type": "NUMBER"},
+                "admin_fees": {"type": "NUMBER"},
+                "maintenance_included": {"type": "BOOLEAN"},
+                "excess_mileage_rate": {"type": "NUMBER"},
+                "unused_mileage_rate": {"type": "NUMBER"},
+                "currency": {"type": "STRING"},
+                "parsing_confidence": {"type": "NUMBER", "description": "A value between 0.0 and 1.0 indicating how confident you are in the extracted data."},
+                "warnings": {"type": "ARRAY", "items": {"type": "STRING"}},
+                "quote_number": {"type": "STRING"},
+                "manufacturer": {"type": "STRING"},
+                "model": {"type": "STRING"},
+                "version": {"type": "STRING"},
+                "jato_code": {"type": "STRING"},
+                "fuel_type": {"type": "STRING"},
+                "num_doors": {"type": "NUMBER"},
+                "hp": {"type": "NUMBER"},
+                "c02_emission": {"type": "NUMBER"},
+                "battery_range": {"type": "NUMBER"},
+                "vehicle_price": {"type": "NUMBER"},
+                "options_price": {"type": "NUMBER"},
+                "accessories_price": {"type": "NUMBER"},
+                "delivery_cost": {"type": "NUMBER"},
+                "registration_tax": {"type": "NUMBER"},
+                "total_net_investment": {"type": "NUMBER"},
+                "taxation_value": {"type": "NUMBER"},
+                "financial_rate": {"type": "NUMBER"},
+                "depreciation_interest": {"type": "NUMBER"},
+                "maintenance_repair": {"type": "NUMBER"},
+                "insurance_cost": {"type": "NUMBER"},
+                "green_tax": {"type": "NUMBER"},
+                "management_fee": {"type": "NUMBER"},
+                "tyres_cost": {"type": "NUMBER"},
+                "roadside_assistance": {"type": "NUMBER"},
+                "total_monthly_lease": {"type": "NUMBER"},
+                "driver_name": {"type": "STRING"},
+                "customer": {"type": "STRING"},
+                "options_list": {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {"name": {"type": "STRING"}, "price": {"type": "NUMBER"}}}},
+                "accessories_list": {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {"name": {"type": "STRING"}, "price": {"type": "NUMBER"}}}}
             }
         }
-        
-        # Mocking the LLM's response for demonstration
-        # This mock data includes all fields now
-        mock_responses = {
-            "Kontraktoplæg_3052514001_1 (1).pdf": {
-                "customer": "Grundfos A/S",
-                "driver_name": None,
-                "vendor": "Ayvens",
-                "vehicle_description": "OPEL GRANDLAND EL 210 73kWh F GS Sky",
-                "duration_months": 48,
-                "total_mileage": 140000,
-                "monthly_rental": 5871.39,
-                "upfront_costs": 0,
-                "deposit": 0,
-                "admin_fees": None,
-                "maintenance_included": True,
-                "excess_mileage_rate": 0.50,
-                "currency": "kr.",
-                "parsing_confidence": 0.95,
-                "warnings": ["Total mileage calculated from annual mileage"],
-                "quote_number": "3052514/001",
-                "manufacturer": "Opel",
-                "model": "Grandland",
-                "version": "EL 210 73kWh F GS Sky",
-                "jato_code": None,
-                "fuel_type": "BEV",
-                "num_doors": None,
-                "hp": None,
-                "c02_emission": 0.00,
-                "battery_range": 582.00,
-                "vehicle_price": 286008.00,
-                "options_price": 25600.00,
-                "accessories_price": 6200.00,
-                "delivery_cost": 3820.00,
-                "registration_tax": 0.00,
-                "total_net_investment": 303028.00,
-                "taxation_value": 361990.00,
-                "financial_rate": None,
-                "depreciation_interest": 4583.57,
-                "maintenance_repair": 752.89,
-                "insurance_cost": 364.59,
-                "green_tax": 70.00,
-                "management_fee": 25.00,
-                "tyres_cost": 687.43,
-                "roadside_assistance": 19.46,
-                "total_monthly_lease": 5871.39,
-                "options_list": [
-                    {"name": "læder pakke", "price": 16000.00},
-                    {"name": "Hvid", "price": 9600.00}
-                ],
-                "accessories_list": [
-                    {"name": "Vinterhjul", "price": 6200.00}
-                ]
-            },
-            "quotation  2508.120.036 (1).pdf": {
-                "customer": "Grundfos EV",
-                "driver_name": "Mikkel Mikkelsen",
-                "vendor": "ARVAL",
-                "vehicle_description": "Opel Grandland EL 210 73kWh F GS Sky 5d",
-                "duration_months": 48,
-                "total_mileage": 140000,
-                "monthly_rental": 5576.79,
-                "upfront_costs": 9900,
-                "deposit": None,
-                "admin_fees": 65,
-                "maintenance_included": True,
-                "excess_mileage_rate": 0.7202,
-                "unused_mileage_rate": -0.7202,
-                "currency": "DKK",
-                "parsing_confidence": 0.98,
-                "warnings": ["Total mileage and duration parsed from combined string"],
-                "quote_number": "2508.120.036",
-                "manufacturer": "Opel",
-                "model": "Grandland",
-                "version": "EL 210 73kWh F GS Sky",
-                "jato_code": None,
-                "fuel_type": "Electric",
-                "num_doors": 5,
-                "hp": 213,
-                "c02_emission": 0.00,
-                "battery_range": 582.00,
-                "vehicle_price": 260408.00,
-                "options_price": 0.00,
-                "accessories_price": 15700.00,
-                "delivery_cost": 13720.00,
-                "registration_tax": 0.00,
-                "total_net_investment": 284928.00,
-                "taxation_value": 329990.00,
-                "financial_rate": 5.30,
-                "depreciation_interest": 4310.27,
-                "maintenance_repair": 363.12,
-                "insurance_cost": 318.80,
-                "green_tax": 70.00,
-                "management_fee": 65.00,
-                "tyres_cost": 419.60,
-                "roadside_assistance": 30.00,
-                "total_monthly_lease": 5576.79,
-                "options_list": [],
-                "accessories_list": [
-                    {"name": "Pre-equipment", "price": 6000.00},
-                    {"name": "Winter tyres", "price": 9700.00}
-                ]
-            },
-            "quotation_6351624001_Georges__Jean-Francois.pdf": {
-                "customer": "Philips Belgium Commercial SA/NV",
-                "driver_name": "Jean-Francois Georges",
-                "vendor": "Aayvens",
-                "vehicle_description": "SKODA ELROQ BEV 82KWH 85 CORPORATE",
-                "duration_months": 60,
-                "total_mileage": 175000,
-                "monthly_rental": 666.47,
-                "upfront_costs": 0,
-                "deposit": 0,
-                "admin_fees": None,
-                "maintenance_included": True,
-                "excess_mileage_rate": None,
-                "unused_mileage_rate": None,
-                "currency": "€",
-                "parsing_confidence": 0.90,
-                "warnings": ["Could not parse specific financial breakdown"],
-                "quote_number": "6351624/001",
-                "manufacturer": "Skoda",
-                "model": "Elroq",
-                "version": "BEV 82KWH 85 CORPORATE",
-                "jato_code": None,
-                "fuel_type": "Electric",
-                "num_doors": 5,
-                "hp": 286,
-                "c02_emission": None,
-                "battery_range": None,
-                "vehicle_price": 39991.74,
-                "options_price": 3120.07,
-                "accessories_price": None,
-                "delivery_cost": 326.45,
-                "registration_tax": None,
-                "total_net_investment": 37113.05,
-                "taxation_value": None,
-                "financial_rate": None,
-                "depreciation_interest": None,
-                "maintenance_repair": None,
-                "insurance_cost": None,
-                "green_tax": None,
-                "management_fee": None,
-                "tyres_cost": None,
-                "roadside_assistance": None,
-                "total_monthly_lease": 666.47,
-                "options_list": [{"name": "Loft interior design", "price": 3120.07}],
-                "accessories_list": []
-            }
-        }
-        
-        # Look up the mock response based on filename
-        extracted_data = mock_responses.get(filename)
-        
-        if extracted_data:
+
+        # Configure the generation settings to force JSON output
+        generation_config = genai.types.GenerationConfig(
+            response_mime_type="application/json",
+            response_schema=json_schema
+        )
+
+        # The system instruction guides the model's behavior
+        system_instruction = "You are a world-class financial analyst. Your task is to extract key data points from a vehicle leasing contract, regardless of the language or format. Return the data as a JSON object strictly following the provided schema. If a value is not found, use `null` or `false`. Do not make up values."
+
+        # Initialize the model with the system instruction and generation config
+        model = genai.GenerativeModel(
+            model_name='gemini-1.5-flash-latest', # Using a fast and capable model
+            system_instruction=system_instruction,
+            generation_config=generation_config
+        )
+
+        try:
+            # Make the API call
+            response = model.generate_content(text)
+
+            # The response text should be a valid JSON string
+            logger.info(f"Received raw JSON response from Gemini for {filename}")
+            extracted_data = json.loads(response.text)
+
+            # Ensure lists are initialized as empty lists if they are null
+            extracted_data['options_list'] = extracted_data.get('options_list') or []
+            extracted_data['accessories_list'] = extracted_data.get('accessories_list') or []
+
             return ParsedOffer(filename=filename, **extracted_data)
-        
-        # Fallback for unknown files or if real API call fails
-        return ParsedOffer(filename=filename, warnings=["LLM parsing failed or is not configured."], parsing_confidence=0.1)
+
+        except Exception as e:
+            logger.error(f"Error during Gemini API call for {filename}: {str(e)}")
+            logger.error(traceback.format_exc())
+            # Return a fallback object with a warning
+            return ParsedOffer(
+                filename=filename,
+                warnings=[f"LLM parsing failed due to an API error: {str(e)}"],
+                parsing_confidence=0.1
+            )
 
 class OfferComparator:
     """Handles comparison and analysis of multiple offers"""
-    
+
     def __init__(self, offers: List[ParsedOffer], config: Dict[str, Any]):
         self.offers = offers
         self.config = config
-    
+
     def validate_offers(self) -> Tuple[bool, List[str]]:
         """Validate that offers can be compared"""
         errors = []
         if len(self.offers) < 2:
             errors.append("Need at least 2 offers for comparison")
             return False, errors
-            
+
         normalized_currencies = [normalize_currency(o.currency) for o in self.offers if o.currency]
         if len(set(normalized_currencies)) > 1:
             errors.append(f"Mixed currencies detected: {set(normalized_currencies)}")
@@ -404,9 +274,9 @@ class OfferComparator:
             errors.append("Some offers are missing mileage information.")
         elif len(set(mileages)) > 1:
             errors.append(f"Contract mileages don't match: {set(mileages)}")
-        
+
         return len(errors) == 0, errors
-    
+
     def calculate_total_costs(self) -> List[Dict[str, Any]]:
         """Calculate total contract costs for all offers"""
         results = []
@@ -448,20 +318,30 @@ def main():
     This tool uses **AI** to analyze and compare leasing offers, handling various document layouts and languages.
     Simply upload your PDF offers, and the app will extract the key data points automatically.
     """)
-    
+
     # Sidebar for configuration
     st.sidebar.header("⚙️ Configuration & Review")
     
+    # --- API Key Input ---
+    # The recommended way is to enter the key in the sidebar.
+    # For local testing, you can uncomment and replace the line below.
+    # api_key = "AIzaSyD07ltM6lxSsD0065ft2SU7JHnnW8yhq54" 
+    api_key = st.sidebar.text_input(
+        "Enter your Google AI API Key",
+        type="password",
+        help="Get your API key from Google AI Studio. For deployed apps, use st.secrets."
+    )
+
     # File upload
     st.header("📁 Upload Offers")
-    
+
     reference_file = st.file_uploader(
         "Upload the Reference Offer (1 file)",
         type=['pdf'],
         accept_multiple_files=False,
         help="Upload the PDF file that will be used as the benchmark for comparison"
     )
-    
+
     other_files = st.file_uploader(
         "Upload Other Offers (1-9 files)",
         type=['pdf'],
@@ -471,36 +351,18 @@ def main():
 
     if reference_file and other_files:
         if len(other_files) >= 1:
+            # Check for API Key before processing
+            if not api_key:
+                st.error("❌ Please enter your Google AI API Key in the sidebar to proceed.")
+                st.stop()
+
             uploaded_files = [reference_file] + other_files
             template_buffer = create_default_template()
-            process_offers(template_buffer, uploaded_files)
+            # Pass the api_key to the processing function
+            process_offers(api_key, template_buffer, uploaded_files)
         else:
             st.warning("⚠️ Please upload at least one other PDF file for comparison")
 
-def create_demo_data():
-    """Create dummy files for demonstration purposes."""
-    st.info("Loading demo data...")
-    # These mock files contain the text content from the PDFs the user provided
-    demo_offers = [
-        ("Kontraktoplæg_3052514001_1 (1).pdf", "Kontraktoplæg 3052514/001 ... Periode (mdr.): 48 ... Kilometer pr. år: 35.000 ... Leasinggiver: Ayvens ..."),
-        ("quotation  2508.120.036 (1).pdf", "ARVAL ... quotation: 2508.120.03610/ ... contract annual kilometres/term (month): 35.000/48 ... price per month excl. VAT: 5.576,79 ...")
-    ]
-    uploaded_files = []
-    for filename, content in demo_offers:
-        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-            tmp.write(content.encode('utf-8'))
-            tmp_path = tmp.name
-        
-        uploaded_file = st.runtime.uploaded_file_manager.UploadedFile(
-            name=filename,
-            type="application/pdf",
-            path=tmp_path,
-            size=len(content.encode('utf-8'))
-        )
-        uploaded_files.append(uploaded_file)
-        
-    st.success("Demo data loaded! Please click the 'Compare Offers' button to proceed.")
-    return uploaded_files
 
 def create_default_template() -> io.BytesIO:
     """Create a default Excel template file for demonstration."""
@@ -541,17 +403,17 @@ def calculate_similarity_score(s1: str, s2: str) -> float:
         common_words = {'el', 'km', 'h', 'hp', 'd', 'f', 'gs', 'sky'}
         tokens = [word for word in text.split() if word not in common_words]
         return " ".join(tokens)
-    
+
     s1_preprocessed = preprocess(s1)
     s2_preprocessed = preprocess(s2)
-    
+
     matcher = difflib.SequenceMatcher(None, s1_preprocessed, s2_preprocessed)
     return matcher.ratio() * 100
 
 def get_offer_diff(offer1: ParsedOffer, offer2: ParsedOffer) -> str:
     """Compares two ParsedOffer objects and returns a string summarizing the differences."""
     diff_summary = []
-    
+
     # List of key fields to compare, excluding the ones to ignore
     fields_to_compare = [
         'vehicle_description', 'manufacturer', 'model', 'version',
@@ -563,7 +425,7 @@ def get_offer_diff(offer1: ParsedOffer, offer2: ParsedOffer) -> str:
     for field in fields_to_compare:
         val1 = getattr(offer1, field)
         val2 = getattr(offer2, field)
-        
+
         # Special handling for specific fields
         if field == 'currency':
             if normalize_currency(val1) == normalize_currency(val2):
@@ -573,7 +435,7 @@ def get_offer_diff(offer1: ParsedOffer, offer2: ParsedOffer) -> str:
             val2_lower = str(val2).lower() if val2 else None
             if (val1_lower in ['bev', 'electric'] and val2_lower in ['bev', 'electric']) or (val1 == val2):
                 continue
-        
+
         # Format values for display
         if isinstance(val1, float) or isinstance(val2, float):
             val1_str = f"{val1:,.2f}" if val1 is not None else "N/A"
@@ -581,7 +443,7 @@ def get_offer_diff(offer1: ParsedOffer, offer2: ParsedOffer) -> str:
         else:
             val1_str = str(val1) if val1 is not None else "N/A"
             val2_str = str(val2) if val2 is not None else "N/A"
-            
+
         if val1_str.lower() == val2_str.lower():
             continue
 
@@ -594,15 +456,19 @@ def get_offer_diff(offer1: ParsedOffer, offer2: ParsedOffer) -> str:
 
     return "\n".join(diff_summary) if diff_summary else "No significant differences found."
 
-
-def process_offers(template_buffer, uploaded_files):
+def process_offers(api_key: str, template_buffer, uploaded_files):
     """Process uploaded offers and generate comparison"""
-    parser = LLMParser(api_key="your-api-key")
+    try:
+        parser = LLMParser(api_key=api_key)
+    except ValueError as e:
+        st.error(f"❌ Initialization Error: {e}")
+        return
+
     offers = []
-    
+
     progress_bar = st.progress(0)
     status_text = st.empty()
-    
+
     for i, uploaded_file in enumerate(uploaded_files):
         status_text.text(f"Processing {uploaded_file.name} with AI...")
         try:
@@ -614,23 +480,23 @@ def process_offers(template_buffer, uploaded_files):
             st.error(f"❌ Error processing {uploaded_file.name}: {str(e)}")
             logger.error(f"File processing error: {e}\n{traceback.format_exc()}")
         progress_bar.progress((i + 1) / len(uploaded_files))
-    
+
     status_text.text("AI parsing complete!")
     progress_bar.empty()
-    
+
     if not offers or not any(o.parsing_confidence > 0 for o in offers):
-        st.error("❌ No offers could be processed successfully. Please check the file format.")
+        st.error("❌ No offers could be processed successfully. Please check the file format or API key.")
         return
-        
+
     display_parsing_results(offers)
-    
+
     # User-editable mapping section
     st.sidebar.subheader("Review AI-Suggested Mappings")
     st.sidebar.markdown("Review the AI's guesses for each field. You can edit them if needed.")
 
     # Create a dynamic mapping dictionary with initial AI guesses
     mapping_suggestions = defaultdict(str)
-    
+
     # These are hardcoded for now, but in a real app would be dynamic
     mapping_suggestions['Quote number'] = 'quote_number'
     mapping_suggestions['Driver name'] = 'driver_name'
@@ -671,24 +537,24 @@ def process_offers(template_buffer, uploaded_files):
     with st.sidebar.expander("📝 Field Mappings"):
         for template_field, suggested_llm_field in mapping_suggestions.items():
             user_mapping[template_field] = st.text_input(
-                f"Map '{template_field}' to which LLM field?", 
-                value=suggested_llm_field, 
+                f"Map '{template_field}' to which LLM field?",
+                value=suggested_llm_field,
                 key=f"map_{template_field}"
             )
 
     if st.button("Generate Report", help="Click to generate the final Excel report"):
         comparator = OfferComparator(offers, {})
         is_valid, errors = comparator.validate_offers()
-        
+
         if not is_valid:
             st.error("❌ Validation Errors: Offers cannot be compared due to inconsistencies.")
             for error in errors:
                 st.error(f"• {error}")
             return
-        
+
         try:
             excel_buffer = generate_excel_report(offers, template_buffer, user_mapping)
-            
+
             # Use consolidated customer and driver names for file naming only
             common_customer, common_driver = consolidate_names(offers)
             customer_name = common_customer if common_customer else "Customer"
@@ -726,12 +592,12 @@ def consolidate_names(offers: List[ParsedOffer]) -> Tuple[str, str]:
         else:
             # If no simple match, use the first customer name found
             common_customer = customer_names[0]
-            
+
     return common_customer, driver_name
 
 def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO, user_mapping: Dict[str, str]) -> io.BytesIO:
     """Generate Excel report based on the provided template and parsed offers."""
-    
+
     # Load the template Excel file from the buffer
     try:
         template_df = pd.read_excel(template_buffer)
@@ -745,17 +611,17 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
         upfront_costs = (offer.upfront_costs or 0) + (offer.deposit or 0) + (offer.admin_fees or 0)
         offer_dict['total_contract_cost'] = (offer.monthly_rental * offer.duration_months) + upfront_costs if offer.monthly_rental and offer.duration_months else None
         offer_data_list.append(offer_dict)
-    
+
     offers_df = pd.DataFrame(offer_data_list)
     reference_offer = offers[0]
     other_offers = offers[1:]
 
     # Get the list of vendors to use as column headers
     vendors = [offer.get('vendor', 'Unknown Vendor') for offer in offer_data_list]
-    
+
     # Initialize the list of rows for the final DataFrame
     final_report_df_rows = []
-    
+
     # First row: "Leasing company" and vendor names
     leasing_company_row = ['Leasing company'] + vendors
     final_report_df_rows.append(leasing_company_row)
@@ -767,7 +633,7 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
     # Rebuild the rest of the report based on the template fields
     for index, row in template_df.iterrows():
         template_field = row['Field']
-        
+
         # Skip fields that are handled separately at the end
         if template_field in ['Quote number', 'Winner']:
             continue
@@ -801,7 +667,7 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
         # Add a blank row if the field is a new section header
         if template_field in ['Driver name', 'Vehicle Description', 'Investment', 'Taxation', 'Duration & Mileage', 'Financial rate', 'Service rate', 'Monthly fee', 'Excess / unused km', 'Total cost', 'Equipment']:
              final_report_df_rows.append([''] * (len(vendors) + 1))
-        
+
         # Add the field title row (e.g., "Equipment" itself)
         if template_field in ['Equipment']:
             final_report_df_rows.append([template_field] + [''] * len(vendors))
@@ -847,7 +713,7 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
         row_index = final_report_df[final_report_df['Field'] == 'Accessories (excl. taxes)'].index
         if not row_index.empty:
             insert_idx = row_index[0] + 1
-            
+
             # Create a list of rows to insert
             rows_to_insert = [
                 [''] * (len(vendors) + 1),  # Blank row
@@ -855,10 +721,10 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
                 [''] * (len(vendors) + 1),  # Blank row
                 ['Gap analysis', 'N/A'] + [get_offer_diff(reference_offer, o) for o in other_offers]
             ]
-            
+
             # Create a DataFrame for the new rows
             insert_df = pd.DataFrame(rows_to_insert, columns=final_report_df.columns)
-            
+
             # Insert the rows into the main DataFrame
             final_report_df = pd.concat([
                 final_report_df.iloc[:insert_idx],
@@ -869,7 +735,7 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
     # Add Cost Analysis Summary at the bottom
     final_report_df.loc[len(final_report_df)] = [''] * len(final_report_df.columns)
     final_report_df.loc[len(final_report_df)] = ['Cost Analysis'] + [''] * (len(final_report_df.columns) - 1)
-    
+
     cost_data = OfferComparator(offers, {}).calculate_total_costs()
     # Find the order of vendors based on the original offer list for the cost summary
     original_vendor_order = [offer.get('vendor', 'Unknown Vendor') for offer in offer_data_list]
@@ -878,13 +744,13 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
 
     # Determine winner based on the minimum total cost
     min_cost = sorted_cost_df['total_contract_cost'].min()
-    
+
     total_cost_row = ['Total Cost'] + [row['total_contract_cost'] for _, row in sorted_cost_df.iterrows()]
     monthly_cost_row = ['Monthly Cost'] + [row['cost_per_month'] for _, row in sorted_cost_df.iterrows()]
     winner_row = ['Winner'] + ["🥇 Winner" if row['total_contract_cost'] == min_cost else "" for _, row in sorted_cost_df.iterrows()]
 
     summary_df = pd.DataFrame([total_cost_row, monthly_cost_row, winner_row], columns=final_report_df.columns)
-    
+
     final_report_df = pd.concat([final_report_df, summary_df], ignore_index=True)
 
     # Use a BytesIO buffer to save the Excel file in memory
@@ -893,7 +759,7 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
         final_report_df.to_excel(writer, sheet_name='Quotation', index=False, header=False)
         workbook = writer.book
         worksheet = writer.sheets['Quotation']
-        
+
         bold_format = workbook.add_format({'bold': True})
         winner_format = workbook.add_format({'bold': True, 'bg_color': '#87E990'})
         wrap_format = workbook.add_format({'text_wrap': True, 'valign': 'top'})
@@ -904,20 +770,20 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
             if val == "🥇 Winner":
                 winner_col_idx = i
                 break
-        
+
         # Apply formatting
         for r_idx, row in enumerate(final_report_df.values):
             field_name = str(row[0])
-            
+
             # Bold section headers
             if field_name in ['Leasing company', 'Driver name', 'Vehicle Description', 'Investment', 'Taxation', 'Duration & Mileage', 'Financial rate', 'Service rate', 'Monthly fee', 'Excess / unused km', 'Equipment', 'Cost Analysis', 'Gap analysis', 'Vehicle description correspondence']:
                 worksheet.write(r_idx, 0, field_name, bold_format)
-            
+
             # Apply text wrapping for Gap Analysis and aggregated equipment names
             if field_name in ['Gap analysis', 'Additional equipment']:
                 for c_idx in range(1, len(row)):
                     worksheet.write(r_idx, c_idx, row[c_idx], wrap_format)
-            
+
             # Highlight the entire winning column in the summary
             if winner_col_idx != -1:
                 if field_name in ['Total Cost', 'Monthly Cost', 'Winner']:
@@ -929,7 +795,7 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
         worksheet.set_column(0, 0, 40) # Field column
         for i in range(1, len(final_report_df.columns)):
             worksheet.set_column(i, i, 25) # Offer columns
-            
+
     buffer.seek(0)
     return buffer
 
@@ -938,14 +804,14 @@ def display_parsing_results(offers: List[ParsedOffer]):
     st.header("📊 Parsing Results")
     col1, col2, col3 = st.columns(3)
     with col1:
-        avg_confidence = np.mean([o.parsing_confidence for o in offers])
+        avg_confidence = np.mean([o.parsing_confidence for o in offers if o.parsing_confidence is not None])
         st.metric("Average Confidence", f"{avg_confidence:.1%}")
     with col2:
         warning_count = sum(len(o.warnings) for o in offers)
         st.metric("Total Warnings", warning_count)
     with col3:
         st.metric("AI-Powered", "✅ Enabled")
-    
+
     with st.expander("📋 Detailed Parsing Results"):
         for offer in offers:
             st.write(f"**{offer.vendor or offer.filename}**")
