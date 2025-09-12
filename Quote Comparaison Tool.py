@@ -503,25 +503,32 @@ def process_offers_internal(api_key: str, uploaded_files) -> List[ParsedOffer]:
 
 def create_default_template() -> io.BytesIO:
     """Create a default Excel template file for demonstration."""
+    # Define the fields in a list
+    fields = [
+        'Quote number', 'Driver name', 'Vehicle Description', 'Manufacturer', 'Model',
+        'Version', 'Internal colour', 'External colour', 'Fuel type',
+        'No. doors', 'Number of gears', 'HP', 'C02 emission WLTP (g/km)', 'Battery range',
+        'Investment', 'Vehicle list price (excl. VAT, excl. options)', 'Options (excl. taxes)',
+        'Accessories (excl. taxes)', 'Delivery cost', 'Registration tax',
+        'Total net investment',
+        'Taxation', 'Taxation value',
+        'Duration & Mileage', 'Term (months)', 'Mileage per year (in km)',
+        'Financial rate', 'Monthly financial rate (depreciation + interest)',
+        'Service rate', 'Maintenance & repair', 'Electricity cost*', 'EV charging station at home*', 
+        'Road side assistance', 'Insurance', 'Green tax*', 'Management fee', 'Tyres (summer and winter)', 
+        'Total monthly service rate',
+        'Monthly fee', 'Total monthly lease ex. VAT',
+        'Excess / unused km', 'Excess kilometers', 'Unused kilometers',
+        'Equipment', 'Additional equipment', 'Additional equipment price',
+        'Winner'
+    ]
+    
+    # Build the dictionary dynamically to prevent length mismatches
     template_data = {
-        'Field': [
-            'Quote number', 'Driver name', 'Vehicle Description', 'Manufacturer', 'Model',
-            'Version', 'Internal colour', 'External colour', 'Fuel type',
-            'No. doors', 'Number of gears', 'HP', 'C02 emission WLTP (g/km)', 'Battery range',
-            'Investment', 'Vehicle list price (excl. VAT, excl. options)', 'Options (excl. taxes)',
-            'Accessories (excl. taxes)', 'Delivery cost', 'Registration tax',
-            'Total net investment',
-            'Taxation', 'Taxation value',
-            'Duration & Mileage', 'Term (months)', 'Mileage per year (in km)',
-            'Financial rate', 'Monthly financial rate (depreciation + interest)',
-            'Service rate', 'Maintenance & repair', 'Electricity cost*', 'EV charging station at home*', 'Road side assistance', 'Insurance', 'Green tax*', 'Management fee', 'Tyres (summer and winter)', 'Total monthly service rate',
-            'Monthly fee', 'Total monthly lease ex. VAT',
-            'Excess / unused km', 'Excess kilometers', 'Unused kilometers',
-            'Equipment', 'Additional equipment', 'Additional equipment price',
-            'Winner'
-        ],
-        'Value': [None] * 46 # Adjusted count
+        'Field': fields,
+        'Value': [None] * len(fields)
     }
+    
     df = pd.DataFrame(template_data)
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
