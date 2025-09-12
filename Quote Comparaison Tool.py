@@ -96,7 +96,6 @@ class ParsedOffer:
     version: Optional[str] = None
     internal_colour: Optional[str] = None
     external_colour: Optional[str] = None
-    jato_code: Optional[str] = None
     fuel_type: Optional[str] = None
     num_doors: Optional[int] = None
     hp: Optional[int] = None
@@ -182,7 +181,7 @@ class LLMParser:
 
         6. `total_net_investment` is sometimes called "Taxable value" or "Total tax of the car".
 
-        7. Treat "BEV", "Battery Electric Vehicle", and "Electric" as the same `fuel_type`.
+        7. Treat "BEV", "Battery Electric Vehicle", "Electric", and "electricity" as the same `fuel_type`.
 
         8. Extract the `internal_colour` and `external_colour` of the vehicle.
 
@@ -219,7 +218,6 @@ class LLMParser:
                 "version": {"type": "STRING"},
                 "internal_colour": {"type": "STRING"},
                 "external_colour": {"type": "STRING"},
-                "jato_code": {"type": "STRING"},
                 "fuel_type": {"type": "STRING"},
                 "num_doors": {"type": "NUMBER"},
                 "hp": {"type": "NUMBER"},
@@ -401,7 +399,6 @@ def main():
     mapping_suggestions['Version'] = 'version'
     mapping_suggestions['Internal colour'] = 'internal_colour'
     mapping_suggestions['External colour'] = 'external_colour'
-    mapping_suggestions['JATO code'] = 'jato_code'
     mapping_suggestions['Fuel type'] = 'fuel_type'
     mapping_suggestions['No. doors'] = 'num_doors'
     mapping_suggestions['HP'] = 'hp'
@@ -413,11 +410,9 @@ def main():
     mapping_suggestions['Delivery cost'] = 'delivery_cost'
     mapping_suggestions['Registration tax'] = 'registration_tax'
     mapping_suggestions['Total net investment'] = 'total_net_investment'
-    mapping_suggestions['Taxation'] = 'taxation'
     mapping_suggestions['Taxation value'] = 'taxation_value'
     mapping_suggestions['Term (months)'] = 'offer_duration_months'
     mapping_suggestions['Mileage per year (in km)'] = 'offer_total_mileage'
-    mapping_suggestions['Financial rate'] = 'financial_rate'
     mapping_suggestions['Monthly financial rate (depreciation + interest)'] = 'depreciation_interest'
     mapping_suggestions['Maintenance & repair'] = 'maintenance_repair'
     mapping_suggestions['Insurance'] = 'insurance_cost'
@@ -511,7 +506,7 @@ def create_default_template() -> io.BytesIO:
     template_data = {
         'Field': [
             'Quote number', 'Driver name', 'Vehicle Description', 'Manufacturer', 'Model',
-            'Version', 'Internal colour', 'External colour', 'JATO code', 'Fuel type',
+            'Version', 'Internal colour', 'External colour', 'Fuel type',
             'No. doors', 'Number of gears', 'HP', 'C02 emission WLTP (g/km)', 'Battery range',
             'Investment', 'Vehicle list price (excl. VAT, excl. options)', 'Options (excl. taxes)',
             'Accessories (excl. taxes)', 'Delivery cost', 'Registration tax',
@@ -523,9 +518,9 @@ def create_default_template() -> io.BytesIO:
             'Monthly fee', 'Total monthly lease ex. VAT',
             'Excess / unused km', 'Excess kilometers', 'Unused kilometers',
             'Equipment', 'Additional equipment', 'Additional equipment price',
-            'Total Cost (excl. VAT)', 'Winner'
+            'Winner'
         ],
-        'Value': [None] * 49
+        'Value': [None] * 46 # Adjusted count
     }
     df = pd.DataFrame(template_data)
     buffer = io.BytesIO()
@@ -556,6 +551,7 @@ def get_offer_diff(offer1: ParsedOffer, offer2: ParsedOffer) -> str:
     """Compares two ParsedOffer objects and returns a string summarizing the differences."""
     diff_summary = []
     SIMILARITY_THRESHOLD = 90.0  # Similarity threshold for vehicle descriptions
+    ELECTRIC_SYNONYMS = {'bev', 'electric', 'battery electric vehicle', 'electricity'}
 
     fields_to_compare = [
         'vehicle_description', 'manufacturer', 'model', 'version',
@@ -579,9 +575,9 @@ def get_offer_diff(offer1: ParsedOffer, offer2: ParsedOffer) -> str:
                 continue
         # Special handling for fuel type
         elif field == 'fuel_type':
-            val1_lower = str(val1).lower() if val1 else None
-            val2_lower = str(val2).lower() if val2 else None
-            if (val1_lower in ['bev', 'electric'] and val2_lower in ['bev', 'electric']) or (val1 == val2):
+            val1_lower = str(val1).lower().strip() if val1 else None
+            val2_lower = str(val2).lower().strip() if val2 else None
+            if val1_lower in ELECTRIC_SYNONYMS and val2_lower in ELECTRIC_SYNONYMS:
                 continue
         # Strict comparison for other fields
         elif str(val1).lower() == str(val2).lower():
@@ -640,17 +636,34 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
     final_report_df_rows = []
     final_report_df_rows.append(['Leasing company'] + vendors)
 
+    # Define fields that are titles and should have empty rows
+    TITLE_ONLY_FIELDS = [
+        'Investment', 'Taxation', 'Duration & Mileage', 'Financial rate', 
+        'Service rate', 'Monthly fee', 'Excess / unused km', 'Equipment'
+    ]
+
     for index, row in template_df.iterrows():
         template_field = row['Field']
 
         if template_field in ['Leasing company', 'Winner']:
             continue
+        
+        # Handle title-only fields
+        if template_field in TITLE_ONLY_FIELDS:
+            final_report_df_rows.append([''] * (len(vendors) + 1)) # Blank separator row
+            final_report_df_rows.append([template_field] + [''] * len(vendors))
+            continue
 
+        # Add a blank row before specific sections
+        if template_field in ['Driver name', 'Vehicle Description']:
+             final_report_df_rows.append([''] * (len(vendors) + 1))
+
+        # Handle aggregated equipment fields
         if template_field == 'Additional equipment':
             new_row = [template_field]
             for offer in offers:
                 all_names = [item['name'] for item in offer.options_list + offer.accessories_list]
-                new_row.append(", ".join(all_names))
+                new_row.append(", ".join(all_names) if all_names else None)
             final_report_df_rows.append(new_row)
             continue
 
@@ -665,13 +678,7 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
             final_report_df_rows.append(new_row)
             continue
 
-        if template_field in ['Driver name', 'Vehicle Description', 'Investment', 'Taxation', 'Duration & Mileage', 'Financial rate', 'Service rate', 'Monthly fee', 'Excess / unused km', 'Total Cost (excl. VAT)', 'Equipment']:
-             final_report_df_rows.append([''] * (len(vendors) + 1))
-
-        if template_field in ['Equipment']:
-            final_report_df_rows.append([template_field] + [''] * len(vendors))
-            continue
-
+        # Default behavior for regular data fields
         new_row = [template_field]
         for offer in offer_data_list:
             llm_field_name = user_mapping.get(template_field)
@@ -713,6 +720,7 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
             insert_df = pd.DataFrame(rows_to_insert, columns=final_report_df.columns)
             final_report_df = pd.concat([final_report_df.iloc[:insert_idx], insert_df, final_report_df.iloc[insert_idx:]]).reset_index(drop=True)
 
+    # Cost Analysis section
     final_report_df.loc[len(final_report_df)] = [''] * len(final_report_df.columns)
     final_report_df.loc[len(final_report_df)] = ['Cost Analysis (excl. VAT)'] + [''] * (len(final_report_df.columns) - 1)
 
@@ -727,34 +735,66 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
     winner_row = ['Winner'] + ["🥇 Winner" if row['total_contract_cost'] == min_cost else "" for _, row in sorted_cost_df.iterrows()]
     summary_df = pd.DataFrame([total_cost_row, monthly_cost_row, winner_row], columns=final_report_df.columns)
     final_report_df = pd.concat([final_report_df, summary_df], ignore_index=True)
-
+    
+    # --- EXCEL GENERATION AND FORMATTING ---
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
         final_report_df.to_excel(writer, sheet_name='Quotation', index=False, header=False)
         workbook = writer.book
         worksheet = writer.sheets['Quotation']
-        bold_format = workbook.add_format({'bold': True})
-        winner_format = workbook.add_format({'bold': True, 'bg_color': '#87E990'})
-        wrap_format = workbook.add_format({'text_wrap': True, 'valign': 'top'})
 
+        # Define formats
+        bold_format = workbook.add_format({'bold': True})
+        winner_format = workbook.add_format({'bold': True, 'bg_color': '#C6EFCE', 'font_color': '#006100'}) # Green
+        wrap_format = workbook.add_format({'text_wrap': True, 'valign': 'top'})
+        green_highlight = workbook.add_format({'bg_color': '#C6EFCE'}) # Green fill
+        orange_highlight = workbook.add_format({'bg_color': '#FFEB9C'}) # Orange fill
+        red_highlight = workbook.add_format({'bg_color': '#FFC7CE'}) # Red fill
+
+        # Determine "Taxation value" formatting
+        tax_row_values = final_report_df[final_report_df['Field'] == 'Taxation value'].iloc[0, 1:].tolist()
+        numeric_tax_values = [float(v) for v in tax_row_values if isinstance(v, (int, float))]
+        tax_format_to_apply = None
+        if len(numeric_tax_values) > 1:
+            diff = max(numeric_tax_values) - min(numeric_tax_values)
+            if diff == 0:
+                tax_format_to_apply = green_highlight
+            elif diff < 1:
+                tax_format_to_apply = orange_highlight
+            else: # diff >= 1
+                tax_format_to_apply = red_highlight
+        
+        # Find winner column
         winner_col_idx = -1
         for i, val in enumerate(winner_row):
             if val == "🥇 Winner":
                 winner_col_idx = i
                 break
 
+        # Apply formatting row by row
         for r_idx, row in enumerate(final_report_df.values):
             field_name = str(row[0])
-            if field_name in ['Leasing company', 'Driver name', 'Vehicle Description', 'Investment', 'Taxation', 'Duration & Mileage', 'Financial rate', 'Service rate', 'Monthly fee', 'Excess / unused km', 'Equipment', 'Cost Analysis (excl. VAT)', 'Gap analysis', 'Vehicle description correspondence']:
+            # Bold all section headers
+            if field_name in TITLE_ONLY_FIELDS + ['Leasing company', 'Driver name', 'Vehicle Description', 'Cost Analysis (excl. VAT)', 'Gap analysis', 'Vehicle description correspondence']:
                 worksheet.write(r_idx, 0, field_name, bold_format)
+            
+            # Apply wrapping for specific fields
             if field_name in ['Gap analysis', 'Additional equipment']:
                 for c_idx in range(1, len(row)):
                     worksheet.write(r_idx, c_idx, row[c_idx], wrap_format)
+
+            # Apply conditional formatting for "Taxation value"
+            if field_name == 'Taxation value' and tax_format_to_apply:
+                for c_idx in range(1, len(row)):
+                    worksheet.write(r_idx, c_idx, row[c_idx], tax_format_to_apply)
+
+            # Highlight the winning column in the summary
             if winner_col_idx != -1:
                 if field_name in ['Total Cost (excl. VAT)', 'Monthly Cost (excl. VAT)', 'Winner']:
                     worksheet.write(r_idx, winner_col_idx, row[winner_col_idx], winner_format)
                     worksheet.write(0, winner_col_idx, final_report_df.iloc[0, winner_col_idx], winner_format)
 
+        # Set column widths
         worksheet.set_column(0, 0, 40)
         for i in range(1, len(final_report_df.columns)):
             worksheet.set_column(i, i, 25)
