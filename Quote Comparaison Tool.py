@@ -247,7 +247,7 @@ class LLMParser:
         
         # The model call no longer includes a system instruction
         model = genai.GenerativeModel(
-            model_name='gemini-1.5-pro',
+            model_name='gemini-2.5-pro',
             generation_config=generation_config
         )
 
