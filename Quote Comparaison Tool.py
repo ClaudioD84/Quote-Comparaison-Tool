@@ -178,6 +178,14 @@ class LLMParser:
 
         5. Calculate the `offer_total_mileage` by multiplying the annual mileage by the duration in months and dividing by 12 if the document states the annual mileage and contract duration. For example, for "35,000 km per year / 48 months", the total mileage is 35000 * 48 / 12 = 140000.
 
+        6. If you can't find one of the information requested on the offer, return "MISSING" to avoid any confusion.
+
+        7. total_net_investment is sometimes refered to as "Taxable value", "Total tax of the car", ...
+
+        8. "BEV", "Battery Electric Vehicle", "Electric", ... all refers to the same type of "fuel_type", therefore, does not include this into the "Gap analysis" when all the offers all refers to an electric motor
+
+        9. If one of "Vehicle Description" or "Version" of the reference offer includes or is included in the "Vehicle Description" or "Version", it shouldn't show in the "Gap analysis"
+
         Return the data as a JSON object strictly following the provided schema. If a value is not found, use `null` or `false`. Do not make up values.
         
         <DOCUMENT_TO_PARSE>
