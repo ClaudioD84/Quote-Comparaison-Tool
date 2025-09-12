@@ -159,7 +159,7 @@ class LLMParser:
         """
         Sends PDF text to the Gemini API for structured data extraction.
         """
-        logger.info(f"Sending text for parsing to Gemini 1.5 Pro for file: {filename}")
+        logger.info(f"Sending text for parsing to Gemini 2.5 Pro for file: {filename}")
 
         # The instructions are now embedded directly in the prompt
         prompt_text = f"""
@@ -256,7 +256,7 @@ class LLMParser:
             response = model.generate_content(prompt_text)
 
             # The response text should be a valid JSON string
-            logger.info(f"Received raw JSON response from Gemini 1.5 Pro for {filename}")
+            logger.info(f"Received raw JSON response from Gemini 2.5 Pro for {filename}")
             extracted_data = json.loads(response.text)
 
             # Ensure lists are initialized as empty lists if they are null
@@ -266,7 +266,7 @@ class LLMParser:
             return ParsedOffer(filename=filename, **extracted_data)
 
         except Exception as e:
-            logger.error(f"Error during Gemini 1.5 Pro API call for {filename}: {str(e)}")
+            logger.error(f"Error during Gemini 2.5 Pro API call for {filename}: {str(e)}")
             logger.error(traceback.format_exc())
             # Return a fallback object with a warning
             return ParsedOffer(
