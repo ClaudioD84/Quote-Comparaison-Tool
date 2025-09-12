@@ -503,11 +503,12 @@ def process_offers_internal(api_key: str, uploaded_files) -> List[ParsedOffer]:
 
 def create_default_template() -> io.BytesIO:
     """Create a default Excel template file for demonstration."""
-    # Define the fields in a list
+    # Define the fields in a list to control the order
     fields = [
         'Quote number', 'Driver name', 'Vehicle Description', 'Manufacturer', 'Model',
         'Version', 'Internal colour', 'External colour', 'Fuel type',
         'No. doors', 'Number of gears', 'HP', 'C02 emission WLTP (g/km)', 'Battery range',
+        'Equipment', 'Additional equipment', 'Additional equipment price',
         'Investment', 'Vehicle list price (excl. VAT, excl. options)', 'Options (excl. taxes)',
         'Accessories (excl. taxes)', 'Delivery cost', 'Registration tax',
         'Total net investment',
@@ -519,7 +520,6 @@ def create_default_template() -> io.BytesIO:
         'Total monthly service rate',
         'Monthly fee', 'Total monthly lease ex. VAT',
         'Excess / unused km', 'Excess kilometers', 'Unused kilometers',
-        'Equipment', 'Additional equipment', 'Additional equipment price',
         'Winner'
     ]
     
@@ -557,13 +557,15 @@ def calculate_similarity_score(s1: str, s2: str) -> float:
 def get_offer_diff(offer1: ParsedOffer, offer2: ParsedOffer) -> str:
     """Compares two ParsedOffer objects and returns a string summarizing the differences."""
     diff_summary = []
-    SIMILARITY_THRESHOLD = 90.0  # Similarity threshold for vehicle descriptions
+    SIMILARITY_THRESHOLD = 90.0
     ELECTRIC_SYNONYMS = {'bev', 'electric', 'battery electric vehicle', 'electricity'}
 
+    # === Compare standard fields ===
     fields_to_compare = [
         'vehicle_description', 'manufacturer', 'model', 'version',
+        'internal_colour', 'external_colour', # Added colours
         'offer_duration_months', 'offer_total_mileage',
-        'currency', 'total_net_investment', 'taxation_value', 'green_tax',
+        'currency', 'taxation_value', 'green_tax',
         'fuel_type',
     ]
 
@@ -571,37 +573,45 @@ def get_offer_diff(offer1: ParsedOffer, offer2: ParsedOffer) -> str:
         val1 = getattr(offer1, field)
         val2 = getattr(offer2, field)
 
-        # Use flexible comparison for vehicle description and version
         if field in ['vehicle_description', 'version']:
             score = calculate_similarity_score(str(val1 or ''), str(val2 or ''))
             if score >= SIMILARITY_THRESHOLD:
                 continue
-        # Special handling for currency
         elif field == 'currency':
             if normalize_currency(val1) == normalize_currency(val2):
                 continue
-        # Special handling for fuel type
         elif field == 'fuel_type':
             val1_lower = str(val1).lower().strip() if val1 else None
             val2_lower = str(val2).lower().strip() if val2 else None
             if val1_lower in ELECTRIC_SYNONYMS and val2_lower in ELECTRIC_SYNONYMS:
                 continue
-        # Strict comparison for other fields
         elif str(val1).lower() == str(val2).lower():
             continue
 
-        # Format values for display
         val1_str = str(val1) if val1 is not None else "MISSING"
         val2_str = str(val2) if val2 is not None else "MISSING"
 
         if val1 is None and val2 is not None:
-            diff_summary.append(f"• {field}: MISSING vs {val2_str}")
+            diff_summary.append(f"• {field.replace('_', ' ').title()}: MISSING vs {val2_str}")
         elif val1 is not None and val2 is None:
-            diff_summary.append(f"• {field}: {val1_str} vs MISSING")
+            diff_summary.append(f"• {field.replace('_', ' ').title()}: {val1_str} vs MISSING")
         else:
-            diff_summary.append(f"• {field}: {val1_str} vs {val2_str}")
+            diff_summary.append(f"• {field.replace('_', ' ').title()}: {val1_str} vs {val2_str}")
+
+    # === Compare equipment lists ===
+    equip1 = {item['name'].strip() for item in offer1.options_list + offer1.accessories_list}
+    equip2 = {item['name'].strip() for item in offer2.options_list + offer2.accessories_list}
+    
+    added_equip = equip2 - equip1
+    removed_equip = equip1 - equip2
+
+    if added_equip:
+        diff_summary.append(f"• Equipment Added: {', '.join(sorted(list(added_equip)))}")
+    if removed_equip:
+        diff_summary.append(f"• Equipment Removed: {', '.join(sorted(list(removed_equip)))}")
 
     return "\n".join(diff_summary) if diff_summary else "No significant differences found."
+
 
 def consolidate_names(offers: List[ParsedOffer]) -> Tuple[str, str]:
     """Consolidate customer and driver names from a list of parsed offers."""
@@ -715,7 +725,7 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
     final_report_df = pd.DataFrame(final_report_df_rows, columns=['Field'] + vendors)
 
     if len(offers) > 1:
-        row_index = final_report_df[final_report_df['Field'] == 'Accessories (excl. taxes)'].index
+        row_index = final_report_df[final_report_df['Field'] == 'Total net investment'].index
         if not row_index.empty:
             insert_idx = row_index[0] + 1
             rows_to_insert = [
@@ -752,11 +762,19 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
 
         # Define formats
         bold_format = workbook.add_format({'bold': True})
-        winner_format = workbook.add_format({'bold': True, 'bg_color': '#C6EFCE', 'font_color': '#006100'}) # Green
+        winner_format = workbook.add_format({'bold': True, 'bg_color': '#C6EFCE', 'font_color': '#006100'})
         wrap_format = workbook.add_format({'text_wrap': True, 'valign': 'top'})
-        green_highlight = workbook.add_format({'bg_color': '#C6EFCE'}) # Green fill
-        orange_highlight = workbook.add_format({'bg_color': '#FFEB9C'}) # Orange fill
-        red_highlight = workbook.add_format({'bg_color': '#FFC7CE'}) # Red fill
+        green_highlight_match = workbook.add_format({'bg_color': '#C6EFCE'})
+        red_highlight_mismatch = workbook.add_format({'bg_color': '#FFC7CE'})
+        orange_highlight_variation = workbook.add_format({'bg_color': '#FFEB9C'})
+
+        # Define fields for spec comparison formatting
+        spec_fields_to_format = [
+            'Vehicle Description', 'Manufacturer', 'Model', 'Version', 'Internal colour', 
+            'External colour', 'Fuel type', 'No. doors', 'Number of gears', 'HP', 
+            'C02 emission WLTP (g/km)', 'Battery range', 'Additional equipment', 
+            'Additional equipment price'
+        ]
 
         # Determine "Taxation value" formatting
         tax_row_values = final_report_df[final_report_df['Field'] == 'Taxation value'].iloc[0, 1:].tolist()
@@ -765,11 +783,11 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
         if len(numeric_tax_values) > 1:
             diff = max(numeric_tax_values) - min(numeric_tax_values)
             if diff == 0:
-                tax_format_to_apply = green_highlight
+                tax_format_to_apply = green_highlight_match
             elif diff < 1:
-                tax_format_to_apply = orange_highlight
-            else: # diff >= 1
-                tax_format_to_apply = red_highlight
+                tax_format_to_apply = orange_highlight_variation
+            else:
+                tax_format_to_apply = red_highlight_mismatch
         
         # Find winner column
         winner_col_idx = -1
@@ -781,27 +799,33 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
         # Apply formatting row by row
         for r_idx, row in enumerate(final_report_df.values):
             field_name = str(row[0])
-            # Bold all section headers
             if field_name in TITLE_ONLY_FIELDS + ['Leasing company', 'Driver name', 'Vehicle Description', 'Cost Analysis (excl. VAT)', 'Gap analysis', 'Vehicle description correspondence']:
                 worksheet.write(r_idx, 0, field_name, bold_format)
             
-            # Apply wrapping for specific fields
             if field_name in ['Gap analysis', 'Additional equipment']:
                 for c_idx in range(1, len(row)):
                     worksheet.write(r_idx, c_idx, row[c_idx], wrap_format)
 
-            # Apply conditional formatting for "Taxation value"
             if field_name == 'Taxation value' and tax_format_to_apply:
                 for c_idx in range(1, len(row)):
                     worksheet.write(r_idx, c_idx, row[c_idx], tax_format_to_apply)
+            
+            # Apply spec comparison formatting
+            if field_name in spec_fields_to_format and len(row) > 2:
+                ref_val = row[1]
+                worksheet.write(r_idx, 1, ref_val, green_highlight_match) # Color reference cell green
+                for c_idx in range(2, len(row)):
+                    current_val = row[c_idx]
+                    if str(current_val) == str(ref_val):
+                        worksheet.write(r_idx, c_idx, current_val, green_highlight_match)
+                    else:
+                        worksheet.write(r_idx, c_idx, current_val, red_highlight_mismatch)
 
-            # Highlight the winning column in the summary
             if winner_col_idx != -1:
                 if field_name in ['Total Cost (excl. VAT)', 'Monthly Cost (excl. VAT)', 'Winner']:
                     worksheet.write(r_idx, winner_col_idx, row[winner_col_idx], winner_format)
                     worksheet.write(0, winner_col_idx, final_report_df.iloc[0, winner_col_idx], winner_format)
 
-        # Set column widths
         worksheet.set_column(0, 0, 40)
         for i in range(1, len(final_report_df.columns)):
             worksheet.set_column(i, i, 25)
