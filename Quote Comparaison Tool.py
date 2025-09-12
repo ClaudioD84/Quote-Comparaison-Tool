@@ -94,6 +94,8 @@ class ParsedOffer:
     manufacturer: Optional[str] = None
     model: Optional[str] = None
     version: Optional[str] = None
+    internal_colour: Optional[str] = None
+    external_colour: Optional[str] = None
     jato_code: Optional[str] = None
     fuel_type: Optional[str] = None
     num_doors: Optional[int] = None
@@ -167,26 +169,24 @@ class LLMParser:
 
         IMPORTANT:
         1. Distinguish between the **maximum allowed** contract terms and the **actual terms of the offer**.
-        - The `max_duration_months` and `max_total_mileage` refer to the maximum possible contract length and total mileage allowed by the leasing company (e.g., "Max contract: 60 months / 300,000 km").
-        - The `offer_duration_months` and `offer_total_mileage` refer to the specific terms of the current offer (e.g., "Current offer: 36 months / 175,000 km").
+        - `max_duration_months` and `max_total_mileage` refer to the maximum possible contract length and total mileage allowed (e.g., "Max contract: 60 months / 300,000 km").
+        - `offer_duration_months` and `offer_total_mileage` refer to the specific terms of this offer (e.g., "Current offer: 36 months / 175,000 km").
 
-        2. All extracted price and cost amounts, including `monthly_rental` and `total_monthly_lease`, should be **excluding VAT (Value-Added Tax)**. Look for cues like "excl. VAT", "net price", or similar phrases to identify the correct value.
+        2. All extracted price and cost amounts, including `monthly_rental` and `total_monthly_lease`, must be **excluding VAT (Value-Added Tax)**. Look for cues like "excl. VAT", "HT", "net price", etc.
 
-        3. Differentiate between the driver and the customer. The `driver_name` is the name of the employee who will use the car. The `customer` is the name of the company that is renting the car. The company name is usually mentioned in the top section of the offer along with the leasing company's name.
+        3. Differentiate between the driver and the customer. `driver_name` is the employee using the car. `customer` is the company renting the car, usually in the header.
 
-        4. For `roadside_assistance`, be flexible and include amounts associated with phrases like "Arval assistance" or "Ayvens assistance" as they represent the same service.
+        4. For `roadside_assistance`, include amounts for phrases like "Arval assistance" or "Ayvens assistance".
 
-        5. Calculate the `offer_total_mileage` by multiplying the annual mileage by the duration in months and dividing by 12 if the document states the annual mileage and contract duration. For example, for "35,000 km per year / 48 months", the total mileage is 35000 * 48 / 12 = 140000.
+        5. Calculate `offer_total_mileage` if annual mileage is given. Example: "35,000 km per year / 48 months" -> total mileage is 35000 * 48 / 12 = 140000.
 
-        6. If you can't find one of the information requested on the offer, return "MISSING" to avoid any confusion.
+        6. `total_net_investment` is sometimes called "Taxable value" or "Total tax of the car".
 
-        7. total_net_investment is sometimes refered to as "Taxable value", "Total tax of the car", ...
+        7. Treat "BEV", "Battery Electric Vehicle", and "Electric" as the same `fuel_type`.
 
-        8. "BEV", "Battery Electric Vehicle", "Electric", ... all refers to the same type of "fuel_type", therefore, does not include this into the "Gap analysis" when all the offers all refers to an electric motor
+        8. Extract the `internal_colour` and `external_colour` of the vehicle.
 
-        9. If one of "Vehicle Description" or "Version" of the reference offer includes or is included in the "Vehicle Description" or "Version", it shouldn't show in the "Gap analysis"
-
-        Return the data as a JSON object strictly following the provided schema. If a value is not found, use `null` or `false`. Do not make up values.
+        Return the data as a JSON object strictly following the provided schema. If a value is not found, use `null`. Do not invent values.
         
         <DOCUMENT_TO_PARSE>
         {text}
@@ -199,7 +199,6 @@ class LLMParser:
             "properties": {
                 "vendor": {"type": "STRING"},
                 "vehicle_description": {"type": "STRING"},
-                # New fields for distinguishing between offer and max terms
                 "max_duration_months": {"type": "NUMBER"},
                 "max_total_mileage": {"type": "NUMBER"},
                 "offer_duration_months": {"type": "NUMBER"},
@@ -218,6 +217,8 @@ class LLMParser:
                 "manufacturer": {"type": "STRING"},
                 "model": {"type": "STRING"},
                 "version": {"type": "STRING"},
+                "internal_colour": {"type": "STRING"},
+                "external_colour": {"type": "STRING"},
                 "jato_code": {"type": "STRING"},
                 "fuel_type": {"type": "STRING"},
                 "num_doors": {"type": "NUMBER"},
@@ -253,21 +254,14 @@ class LLMParser:
             response_schema=json_schema
         )
         
-        # The model call no longer includes a system instruction
         model = genai.GenerativeModel(
             model_name='gemini-2.5-pro',
             generation_config=generation_config
         )
 
         try:
-            # Make the API call with the combined prompt
             response = model.generate_content(prompt_text)
-
-            # The response text should be a valid JSON string
-            logger.info(f"Received raw JSON response from Gemini 2.5 Pro for {filename}")
             extracted_data = json.loads(response.text)
-
-            # Ensure lists are initialized as empty lists if they are null
             extracted_data['options_list'] = extracted_data.get('options_list') or []
             extracted_data['accessories_list'] = extracted_data.get('accessories_list') or []
 
@@ -276,7 +270,6 @@ class LLMParser:
         except Exception as e:
             logger.error(f"Error during Gemini 2.5 Pro API call for {filename}: {str(e)}")
             logger.error(traceback.format_exc())
-            # Return a fallback object with a warning
             return ParsedOffer(
                 filename=filename,
                 warnings=[f"LLM parsing failed due to an API error: {str(e)}"],
@@ -296,7 +289,6 @@ class OfferComparator:
             errors.append("Need at least 2 offers for comparison")
             return False, errors
 
-        # Use the actual offer terms for validation
         normalized_currencies = [normalize_currency(o.currency) for o in self.offers if o.currency]
         if len(set(normalized_currencies)) > 1:
             errors.append(f"Mixed currencies detected: {set(normalized_currencies)}")
@@ -320,7 +312,6 @@ class OfferComparator:
         """Calculate total contract costs for all offers"""
         results = []
         for offer in self.offers:
-            # Use the actual offer terms for cost calculation
             if not offer.offer_duration_months or not offer.monthly_rental:
                 results.append({'vendor': offer.vendor, 'error': 'Missing essential data for cost calculation'})
                 continue
@@ -359,20 +350,14 @@ def main():
     Simply upload your PDF offers, and the app will extract the key data points automatically.
     """)
 
-    # Sidebar for configuration
     st.sidebar.header("⚙️ Configuration & Review")
 
-    # --- API Key Input ---
-    # The recommended way is to enter the key in the sidebar.
-    # For local testing, you can uncomment and replace the line below.
-    # api_key = AIzaSyD07ltM6lxSsD0065ft2SU7JHnnW8yhq54
     api_key = st.sidebar.text_input(
         "Enter your Google AI API Key",
         type="password",
         help="Get your API key from Google AI Studio. For deployed apps, use st.secrets."
     )
 
-    # File upload
     st.header("📁 Upload Offers")
 
     reference_file = st.file_uploader(
@@ -389,40 +374,33 @@ def main():
         help="Upload the other PDF files you want to compare against the reference offer"
     )
 
-    # --- New Logic: Run parsing only on file upload and cache the results ---
     if reference_file or other_files:
         uploaded_files = [reference_file] + other_files
         current_file_names = [f.name for f in uploaded_files if f is not None]
 
-        # Check if files have changed since the last run
         if 'offers' not in st.session_state or st.session_state.get('uploaded_files') != current_file_names:
             if not api_key:
                 st.error("❌ Please enter your Google AI API Key in the sidebar to proceed.")
                 st.stop()
 
-            # Process the files and store the results in session state
             st.session_state.offers = process_offers_internal(api_key, uploaded_files)
             st.session_state.uploaded_files = current_file_names
 
         if st.session_state.offers:
             display_parsing_results(st.session_state.offers)
 
-    # --- End of New Logic ---
-
-    # User-editable mapping section
     st.sidebar.subheader("Review AI-Suggested Mappings")
     st.sidebar.markdown("Review the AI's guesses for each field. You can edit them if needed.")
 
-    # Create a dynamic mapping dictionary with initial AI guesses
     mapping_suggestions = defaultdict(str)
-
-    # These are hardcoded for now, but in a real app would be dynamic
     mapping_suggestions['Quote number'] = 'quote_number'
     mapping_suggestions['Driver name'] = 'driver_name'
     mapping_suggestions['Vehicle Description'] = 'vehicle_description'
     mapping_suggestions['Manufacturer'] = 'manufacturer'
     mapping_suggestions['Model'] = 'model'
     mapping_suggestions['Version'] = 'version'
+    mapping_suggestions['Internal colour'] = 'internal_colour'
+    mapping_suggestions['External colour'] = 'external_colour'
     mapping_suggestions['JATO code'] = 'jato_code'
     mapping_suggestions['Fuel type'] = 'fuel_type'
     mapping_suggestions['No. doors'] = 'num_doors'
@@ -437,9 +415,7 @@ def main():
     mapping_suggestions['Total net investment'] = 'total_net_investment'
     mapping_suggestions['Taxation'] = 'taxation'
     mapping_suggestions['Taxation value'] = 'taxation_value'
-    # Map 'Term (months)' to the actual offer duration
     mapping_suggestions['Term (months)'] = 'offer_duration_months'
-    # Map 'Mileage per year (in km)' to the actual offer mileage
     mapping_suggestions['Mileage per year (in km)'] = 'offer_total_mileage'
     mapping_suggestions['Financial rate'] = 'financial_rate'
     mapping_suggestions['Monthly financial rate (depreciation + interest)'] = 'depreciation_interest'
@@ -464,7 +440,6 @@ def main():
             )
 
     if st.button("Generate Report", help="Click to generate the final Excel report"):
-        # Retrieve offers from session state instead of re-parsing
         offers = st.session_state.get('offers')
         if not offers:
             st.error("❌ No offers found. Please upload files first.")
@@ -482,8 +457,6 @@ def main():
         try:
             template_buffer = create_default_template()
             excel_buffer = generate_excel_report(offers, template_buffer, user_mapping)
-
-            # Use consolidated customer and driver names for file naming only
             common_customer, common_driver = consolidate_names(offers)
             customer_name = common_customer if common_customer else "Customer"
             driver_name = common_driver if common_driver else "Driver"
@@ -508,7 +481,6 @@ def process_offers_internal(api_key: str, uploaded_files) -> List[ParsedOffer]:
         return []
 
     offers = []
-
     progress_bar = st.progress(0)
     status_text = st.empty()
 
@@ -532,17 +504,15 @@ def process_offers_internal(api_key: str, uploaded_files) -> List[ParsedOffer]:
     if not offers or not any(o.parsing_confidence > 0 for o in offers):
         st.error("❌ No offers could be processed successfully. Please check the file format or API key.")
         return []
-
     return offers
-
 
 def create_default_template() -> io.BytesIO:
     """Create a default Excel template file for demonstration."""
     template_data = {
         'Field': [
             'Quote number', 'Driver name', 'Vehicle Description', 'Manufacturer', 'Model',
-            'Version', 'JATO code', 'Fuel type', 'No. doors', 'Number of gears', 'HP',
-            'C02 emission WLTP (g/km)', 'Battery range',
+            'Version', 'Internal colour', 'External colour', 'JATO code', 'Fuel type',
+            'No. doors', 'Number of gears', 'HP', 'C02 emission WLTP (g/km)', 'Battery range',
             'Investment', 'Vehicle list price (excl. VAT, excl. options)', 'Options (excl. taxes)',
             'Accessories (excl. taxes)', 'Delivery cost', 'Registration tax',
             'Total net investment',
@@ -553,9 +523,9 @@ def create_default_template() -> io.BytesIO:
             'Monthly fee', 'Total monthly lease ex. VAT',
             'Excess / unused km', 'Excess kilometers', 'Unused kilometers',
             'Equipment', 'Additional equipment', 'Additional equipment price',
-            'Total cost', 'Winner'
+            'Total Cost (excl. VAT)', 'Winner'
         ],
-        'Value': [None] * 47
+        'Value': [None] * 49
     }
     df = pd.DataFrame(template_data)
     buffer = io.BytesIO()
@@ -567,12 +537,12 @@ def create_default_template() -> io.BytesIO:
 def calculate_similarity_score(s1: str, s2: str) -> float:
     """
     Calculates a robust similarity score between two strings,
-    ignoring case, punctuation, and common words.
+    ignoring case, punctuation, and common irrelevant words.
     """
     def preprocess(text: str) -> str:
         text = text.lower()
-        text = re.sub(r'[^a-z0-9\s]', '', text)  # Remove punctuation
-        common_words = {'el', 'km', 'h', 'hp', 'd', 'f', 'gs', 'sky'}
+        text = re.sub(r'[^a-z0-9\s]', '', text)
+        common_words = {'el', 'km', 'h', 'hp', 'd', 'f', 'gs', 'sky', 'hk', 'auto', 'farve', 'color'}
         tokens = [word for word in text.split() if word not in common_words]
         return " ".join(tokens)
 
@@ -583,13 +553,12 @@ def calculate_similarity_score(s1: str, s2: str) -> float:
     return matcher.ratio() * 100
 
 def get_offer_diff(offer1: ParsedOffer, offer2: ParsedOffer) -> str:
-    """Comparares two ParsedOffer objects and returns a string summarizing the differences."""
+    """Compares two ParsedOffer objects and returns a string summarizing the differences."""
     diff_summary = []
+    SIMILARITY_THRESHOLD = 90.0  # Similarity threshold for vehicle descriptions
 
-    # List of key fields to compare, excluding the ones to ignore
     fields_to_compare = [
         'vehicle_description', 'manufacturer', 'model', 'version',
-        # Use the actual offer terms for comparison
         'offer_duration_months', 'offer_total_mileage',
         'currency', 'total_net_investment', 'taxation_value', 'green_tax',
         'fuel_type',
@@ -599,31 +568,33 @@ def get_offer_diff(offer1: ParsedOffer, offer2: ParsedOffer) -> str:
         val1 = getattr(offer1, field)
         val2 = getattr(offer2, field)
 
-        # Special handling for specific fields
-        if field == 'currency':
+        # Use flexible comparison for vehicle description and version
+        if field in ['vehicle_description', 'version']:
+            score = calculate_similarity_score(str(val1 or ''), str(val2 or ''))
+            if score >= SIMILARITY_THRESHOLD:
+                continue
+        # Special handling for currency
+        elif field == 'currency':
             if normalize_currency(val1) == normalize_currency(val2):
                 continue
+        # Special handling for fuel type
         elif field == 'fuel_type':
             val1_lower = str(val1).lower() if val1 else None
             val2_lower = str(val2).lower() if val2 else None
             if (val1_lower in ['bev', 'electric'] and val2_lower in ['bev', 'electric']) or (val1 == val2):
                 continue
-
-        # Format values for display
-        if isinstance(val1, float) or isinstance(val2, float):
-            val1_str = f"{val1:,.2f}" if val1 is not None else "N/A"
-            val2_str = f"{val2:,.2f}" if val2 is not None else "N/A"
-        else:
-            val1_str = str(val1) if val1 is not None else "N/A"
-            val2_str = str(val2) if val2 is not None else "N/A"
-
-        if val1_str.lower() == val2_str.lower():
+        # Strict comparison for other fields
+        elif str(val1).lower() == str(val2).lower():
             continue
 
+        # Format values for display
+        val1_str = str(val1) if val1 is not None else "MISSING"
+        val2_str = str(val2) if val2 is not None else "MISSING"
+
         if val1 is None and val2 is not None:
-            diff_summary.append(f"• {field}: Not in reference vs {val2_str}")
+            diff_summary.append(f"• {field}: MISSING vs {val2_str}")
         elif val1 is not None and val2 is None:
-            diff_summary.append(f"• {field}: {val1_str} vs Not in offer")
+            diff_summary.append(f"• {field}: {val1_str} vs MISSING")
         else:
             diff_summary.append(f"• {field}: {val1_str} vs {val2_str}")
 
@@ -634,105 +605,73 @@ def consolidate_names(offers: List[ParsedOffer]) -> Tuple[str, str]:
     common_customer = None
     driver_name = None
 
-    # Find a common driver name
     for offer in offers:
         if offer.driver_name:
             driver_name = offer.driver_name
             break
 
-    # Find a common customer name
     customer_names = [o.customer for o in offers if o.customer]
     if customer_names:
-        # Simple consolidation: find the shortest common starting string
         first_name = customer_names[0].split()[0]
         if all(name.startswith(first_name) for name in customer_names):
             common_customer = first_name
         else:
-            # If no simple match, use the first customer name found
             common_customer = customer_names[0]
 
     return common_customer, driver_name
 
 def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO, user_mapping: Dict[str, str]) -> io.BytesIO:
     """Generate Excel report based on the provided template and parsed offers."""
-
-    # Load the template Excel file from the buffer
     try:
         template_df = pd.read_excel(template_buffer)
     except Exception as e:
         raise ValueError(f"Failed to read Excel template. Error: {e}")
 
-    # Process offers and add their data to the report
     offer_data_list = []
     for offer in offers:
         offer_dict = asdict(offer)
         upfront_costs = (offer.upfront_costs or 0) + (offer.deposit or 0) + (offer.admin_fees or 0)
-        # Use the actual offer terms for calculation
         offer_dict['total_contract_cost'] = (offer.monthly_rental * offer.offer_duration_months) + upfront_costs if offer.monthly_rental and offer.offer_duration_months else None
         offer_data_list.append(offer_dict)
 
-    offers_df = pd.DataFrame(offer_data_list)
     reference_offer = offers[0]
     other_offers = offers[1:]
-
-    # Get the list of vendors to use as column headers
     vendors = [offer.get('vendor', 'Unknown Vendor') for offer in offer_data_list]
-
-    # Initialize the list of rows for the final DataFrame
     final_report_df_rows = []
+    final_report_df_rows.append(['Leasing company'] + vendors)
 
-    # First row: "Leasing company" and vendor names
-    leasing_company_row = ['Leasing company'] + vendors
-    final_report_df_rows.append(leasing_company_row)
-
-    # Second row: "Quote number" and quote numbers
-    quote_number_row = ['Quote number'] + [v.get('quote_number') for v in offer_data_list]
-    final_report_df_rows.append(quote_number_row)
-
-    # Rebuild the rest of the report based on the template fields
     for index, row in template_df.iterrows():
         template_field = row['Field']
 
-        # Skip fields that are handled separately at the end
-        if template_field in ['Quote number', 'Winner']:
+        if template_field in ['Leasing company', 'Winner']:
             continue
 
-        # --- START OF NEW AGGREGATION LOGIC ---
-        # Handle the "Additional equipment" row by joining all item names
         if template_field == 'Additional equipment':
             new_row = [template_field]
             for offer in offers:
-                # Combine names from both options and accessories
                 all_names = [item['name'] for item in offer.options_list + offer.accessories_list]
                 new_row.append(", ".join(all_names))
             final_report_df_rows.append(new_row)
-            continue # Skip default processing for this row
+            continue
 
-        # Handle the "Additional equipment price" row by summing all item prices
         if template_field == 'Additional equipment price':
             new_row = [template_field]
             for offer in offers:
-                # Combine prices from both lists and sum them up
                 all_prices = [item.get('price', 0) or 0 for item in offer.options_list + offer.accessories_list]
                 total_price = sum(all_prices)
-                # Use the sum of options_price and accessories_price as a fallback
                 if total_price == 0:
                     total_price = (offer.options_price or 0) + (offer.accessories_price or 0)
                 new_row.append(total_price if total_price > 0 else None)
             final_report_df_rows.append(new_row)
-            continue # Skip default processing for this row
-        # --- END OF NEW AGGREGATION LOGIC ---
+            continue
 
-        # Add a blank row if the field is a new section header
-        if template_field in ['Driver name', 'Vehicle Description', 'Investment', 'Taxation', 'Duration & Mileage', 'Financial rate', 'Service rate', 'Monthly fee', 'Excess / unused km', 'Total cost', 'Equipment']:
+        if template_field in ['Driver name', 'Vehicle Description', 'Investment', 'Taxation', 'Duration & Mileage', 'Financial rate', 'Service rate', 'Monthly fee', 'Excess / unused km', 'Total Cost (excl. VAT)', 'Equipment']:
              final_report_df_rows.append([''] * (len(vendors) + 1))
 
-        # Add the field title row (e.g., "Equipment" itself)
         if template_field in ['Equipment']:
             final_report_df_rows.append([template_field] + [''] * len(vendors))
             continue
 
-        # Add the field row with values from each offer (default behavior)
         new_row = [template_field]
         for offer in offer_data_list:
             llm_field_name = user_mapping.get(template_field)
@@ -741,120 +680,84 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
                 try:
                     if llm_field_name in offer:
                         if template_field == 'Mileage per year (in km)':
-                            # Use the actual offer duration and mileage
                             if offer.get('offer_duration_months') and offer.get('offer_total_mileage'):
                                 val = int(offer.get('offer_total_mileage') / (offer.get('offer_duration_months') / 12))
                             else:
                                 val = None
                         elif template_field == 'Total monthly service rate':
-                            # Sum of all service-related costs
                             val = sum([
-                                offer.get('maintenance_repair', 0) or 0,
-                                offer.get('roadside_assistance', 0) or 0,
-                                offer.get('insurance_cost', 0) or 0,
-                                offer.get('green_tax', 0) or 0,
-                                offer.get('management_fee', 0) or 0,
-                                offer.get('tyres_cost', 0) or 0
+                                offer.get('maintenance_repair', 0) or 0, offer.get('roadside_assistance', 0) or 0,
+                                offer.get('insurance_cost', 0) or 0, offer.get('green_tax', 0) or 0,
+                                offer.get('management_fee', 0) or 0, offer.get('tyres_cost', 0) or 0
                             ])
                             if val == 0: val = None
                         else:
                              val = offer.get(llm_field_name)
                 except (ValueError, TypeError):
                     val = "N/A"
-            new_row.append(val)
+            new_row.append(val if val is not None and val != '' else "MISSING")
         final_report_df_rows.append(new_row)
 
-    # Create the DataFrame from the collected rows
     final_report_df = pd.DataFrame(final_report_df_rows, columns=['Field'] + vendors)
 
-    # Calculate and add the single "Vehicle description correspondence" value and "Gap analysis"
     if len(offers) > 1:
-        # Find the index to insert the new rows after "Accessories (excl. taxes)"
         row_index = final_report_df[final_report_df['Field'] == 'Accessories (excl. taxes)'].index
         if not row_index.empty:
             insert_idx = row_index[0] + 1
-
-            # Create a list of rows to insert
             rows_to_insert = [
-                [''] * (len(vendors) + 1),  # Blank row
+                [''] * (len(vendors) + 1),
                 ['Vehicle description correspondence', '100.0%'] + [f"{calculate_similarity_score(reference_offer.vehicle_description, o.vehicle_description):.1f}%" for o in other_offers],
-                [''] * (len(vendors) + 1),  # Blank row
+                [''] * (len(vendors) + 1),
                 ['Gap analysis', 'N/A'] + [get_offer_diff(reference_offer, o) for o in other_offers]
             ]
-
-            # Create a DataFrame for the new rows
             insert_df = pd.DataFrame(rows_to_insert, columns=final_report_df.columns)
+            final_report_df = pd.concat([final_report_df.iloc[:insert_idx], insert_df, final_report_df.iloc[insert_idx:]]).reset_index(drop=True)
 
-            # Insert the rows into the main DataFrame
-            final_report_df = pd.concat([
-                final_report_df.iloc[:insert_idx],
-                insert_df,
-                final_report_df.iloc[insert_idx:]
-            ]).reset_index(drop=True)
-
-    # Add Cost Analysis Summary at the bottom
     final_report_df.loc[len(final_report_df)] = [''] * len(final_report_df.columns)
-    final_report_df.loc[len(final_report_df)] = ['Cost Analysis'] + [''] * (len(final_report_df.columns) - 1)
+    final_report_df.loc[len(final_report_df)] = ['Cost Analysis (excl. VAT)'] + [''] * (len(final_report_df.columns) - 1)
 
     cost_data = OfferComparator(offers).calculate_total_costs()
-    # Find the order of vendors based on the original offer list for the cost summary
     original_vendor_order = [offer.get('vendor', 'Unknown Vendor') for offer in offer_data_list]
     cost_df = pd.DataFrame(cost_data).set_index('vendor')
     sorted_cost_df = cost_df.loc[original_vendor_order].reset_index()
-
-    # Determine winner based on the minimum total cost
     min_cost = sorted_cost_df['total_contract_cost'].min()
 
-    total_cost_row = ['Total Cost'] + [row['total_contract_cost'] for _, row in sorted_cost_df.iterrows()]
-    monthly_cost_row = ['Monthly Cost'] + [row['cost_per_month'] for _, row in sorted_cost_df.iterrows()]
+    total_cost_row = ['Total Cost (excl. VAT)'] + [row['total_contract_cost'] for _, row in sorted_cost_df.iterrows()]
+    monthly_cost_row = ['Monthly Cost (excl. VAT)'] + [row['cost_per_month'] for _, row in sorted_cost_df.iterrows()]
     winner_row = ['Winner'] + ["🥇 Winner" if row['total_contract_cost'] == min_cost else "" for _, row in sorted_cost_df.iterrows()]
-
     summary_df = pd.DataFrame([total_cost_row, monthly_cost_row, winner_row], columns=final_report_df.columns)
-
     final_report_df = pd.concat([final_report_df, summary_df], ignore_index=True)
 
-    # Use a BytesIO buffer to save the Excel file in memory
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
         final_report_df.to_excel(writer, sheet_name='Quotation', index=False, header=False)
         workbook = writer.book
         worksheet = writer.sheets['Quotation']
-
         bold_format = workbook.add_format({'bold': True})
         winner_format = workbook.add_format({'bold': True, 'bg_color': '#87E990'})
         wrap_format = workbook.add_format({'text_wrap': True, 'valign': 'top'})
 
-        # Find the column index of the winning offer
         winner_col_idx = -1
         for i, val in enumerate(winner_row):
             if val == "🥇 Winner":
                 winner_col_idx = i
                 break
 
-        # Apply formatting
         for r_idx, row in enumerate(final_report_df.values):
             field_name = str(row[0])
-
-            # Bold section headers
-            if field_name in ['Leasing company', 'Driver name', 'Vehicle Description', 'Investment', 'Taxation', 'Duration & Mileage', 'Financial rate', 'Service rate', 'Monthly fee', 'Excess / unused km', 'Equipment', 'Cost Analysis', 'Gap analysis', 'Vehicle description correspondence']:
+            if field_name in ['Leasing company', 'Driver name', 'Vehicle Description', 'Investment', 'Taxation', 'Duration & Mileage', 'Financial rate', 'Service rate', 'Monthly fee', 'Excess / unused km', 'Equipment', 'Cost Analysis (excl. VAT)', 'Gap analysis', 'Vehicle description correspondence']:
                 worksheet.write(r_idx, 0, field_name, bold_format)
-
-            # Apply text wrapping for Gap Analysis and aggregated equipment names
             if field_name in ['Gap analysis', 'Additional equipment']:
                 for c_idx in range(1, len(row)):
                     worksheet.write(r_idx, c_idx, row[c_idx], wrap_format)
-
-            # Highlight the entire winning column in the summary
             if winner_col_idx != -1:
-                if field_name in ['Total Cost', 'Monthly Cost', 'Winner']:
+                if field_name in ['Total Cost (excl. VAT)', 'Monthly Cost (excl. VAT)', 'Winner']:
                     worksheet.write(r_idx, winner_col_idx, row[winner_col_idx], winner_format)
-                    # Also highlight the winning vendor in the first row of the report
                     worksheet.write(0, winner_col_idx, final_report_df.iloc[0, winner_col_idx], winner_format)
 
-        # Set column widths
-        worksheet.set_column(0, 0, 40) # Field column
+        worksheet.set_column(0, 0, 40)
         for i in range(1, len(final_report_df.columns)):
-            worksheet.set_column(i, i, 25) # Offer columns
+            worksheet.set_column(i, i, 25)
 
     buffer.seek(0)
     return buffer
@@ -881,7 +784,6 @@ def display_parsing_results(offers: List[ParsedOffer]):
                 for w in offer.warnings:
                     st.write(f"- {w}")
             
-            # Display key extracted data
             st.write("---")
             st.write("**Extracted Data**")
             st.json(asdict(offer))
