@@ -1,4 +1,4 @@
-"""
+"
 AI-Powered Fleet Leasing Offer Comparator - Streamlit App
 This version uses a Large Language Model (LLM) to intelligently parse PDF content.
 Author: Fleet Management Tool
@@ -572,31 +572,41 @@ def get_offer_diff(offer1: ParsedOffer, offer2: ParsedOffer) -> str:
     for field in fields_to_compare:
         val1 = getattr(offer1, field)
         val2 = getattr(offer2, field)
+        
+        # Normalize strings for comparison
+        val1_str = str(val1 or '').strip().lower()
+        val2_str = str(val2 or '').strip().lower()
 
+        # Check for a perfect case-insensitive match
+        if val1_str == val2_str:
+            continue
+        
+        # Special handling for fuzzy matches and substrings
         if field in ['vehicle_description', 'version']:
-            score = calculate_similarity_score(str(val1 or ''), str(val2 or ''))
+            # Check for substring match, e.g., 'EV3' in 'EV3 77kWh'
+            if val1_str in val2_str or val2_str in val1_str:
+                continue
+            # Fallback to the similarity score for more complex matches
+            score = calculate_similarity_score(val1_str, val2_str)
             if score >= SIMILARITY_THRESHOLD:
                 continue
         elif field == 'currency':
-            if normalize_currency(val1) == normalize_currency(val2):
+            if normalize_currency(val1_str) == normalize_currency(val2_str):
                 continue
         elif field == 'fuel_type':
-            val1_lower = str(val1).lower().strip() if val1 else None
-            val2_lower = str(val2).lower().strip() if val2 else None
-            if val1_lower in ELECTRIC_SYNONYMS and val2_lower in ELECTRIC_SYNONYMS:
+            if val1_str in ELECTRIC_SYNONYMS and val2_str in ELECTRIC_SYNONYMS:
                 continue
-        elif str(val1).lower() == str(val2).lower():
-            continue
 
-        val1_str = str(val1) if val1 is not None else "MISSING"
-        val2_str = str(val2) if val2 is not None else "MISSING"
+        # Convert back to original case for the diff message
+        val1_display = str(val1) if val1 is not None else "MISSING"
+        val2_display = str(val2) if val2 is not None else "MISSING"
 
         if val1 is None and val2 is not None:
-            diff_summary.append(f"• {field.replace('_', ' ').title()}: MISSING vs {val2_str}")
+            diff_summary.append(f"• {field.replace('_', ' ').title()}: MISSING vs {val2_display}")
         elif val1 is not None and val2 is None:
-            diff_summary.append(f"• {field.replace('_', ' ').title()}: {val1_str} vs MISSING")
+            diff_summary.append(f"• {field.replace('_', ' ').title()}: {val1_display} vs MISSING")
         else:
-            diff_summary.append(f"• {field.replace('_', ' ').title()}: {val1_str} vs {val2_str}")
+            diff_summary.append(f"• {field.replace('_', ' ').title()}: {val1_display} vs {val2_display}")
 
     # === Compare equipment lists ===
     equip1 = {item['name'].strip() for item in offer1.options_list + offer1.accessories_list}
@@ -812,12 +822,22 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
             
             # Apply spec comparison formatting
             if field_name in spec_fields_to_format and len(row) > 2:
-                ref_val = row[1]
-                worksheet.write(r_idx, 1, ref_val, green_highlight_match) # Color reference cell green
+                ref_val_str = str(row[1] or '').strip().lower()
+                worksheet.write(r_idx, 1, row[1], green_highlight_match) # Color reference cell green
+                
                 for c_idx in range(2, len(row)):
                     current_val = row[c_idx]
-                    if str(current_val) == str(ref_val):
+                    current_val_str = str(current_val or '').strip().lower()
+                    
+                    # Check for a perfect match (case-insensitive)
+                    if current_val_str == ref_val_str:
                         worksheet.write(r_idx, c_idx, current_val, green_highlight_match)
+                    
+                    # Check for a partial match (substring)
+                    elif ref_val_str in current_val_str or current_val_str in ref_val_str:
+                        worksheet.write(r_idx, c_idx, current_val, orange_highlight_variation)
+                    
+                    # If neither is true, it's a mismatch
                     else:
                         worksheet.write(r_idx, c_idx, current_val, red_highlight_mismatch)
 
