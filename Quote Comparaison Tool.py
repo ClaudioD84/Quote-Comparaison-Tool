@@ -416,7 +416,7 @@ def main():
     mapping_suggestions['Monthly financial rate (depreciation + interest)'] = 'depreciation_interest'
     mapping_suggestions['Maintenance & repair'] = 'maintenance_repair'
     mapping_suggestions['Insurance'] = 'insurance_cost'
-    # 'Green tax*' removed from here
+    mapping_suggestions['Green tax*'] = 'green_tax'
     mapping_suggestions['Management fee'] = 'management_fee'
     mapping_suggestions['Tyres (summer and winter)'] = 'tyres_cost'
     mapping_suggestions['Road side assistance'] = 'roadside_assistance'
@@ -515,8 +515,7 @@ def create_default_template() -> io.BytesIO:
         'Taxation', 'Taxation value',
         'Duration & Mileage', 'Term (months)', 'Mileage per year (in km)',
         'Financial rate', 'Monthly financial rate (depreciation + interest)',
-        'Service rate', 'Maintenance & repair', 
-        'Road side assistance', 'Insurance', 'Management fee', 'Tyres (summer and winter)', 
+        'Service rate', 'Maintenance & repair', 'Road side assistance', 'Insurance', 'Management fee', 'Tyres (summer and winter)', 
         'Total monthly service rate',
         'Monthly fee', 'Total monthly lease ex. VAT',
         'Excess / unused km', 'Excess kilometers', 'Unused kilometers',
@@ -725,9 +724,12 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
                             else:
                                 val = None
                         elif template_field == 'Total monthly service rate':
+                            # Calculate sum for the specified lines, using 0 for missing values
                             val = sum([
-                                offer.get('maintenance_repair', 0) or 0, offer.get('roadside_assistance', 0) or 0,
-                                offer.get('insurance_cost', 0) or 0, offer.get('management_fee', 0) or 0, 
+                                offer.get('maintenance_repair', 0) or 0,
+                                offer.get('roadside_assistance', 0) or 0,
+                                offer.get('insurance_cost', 0) or 0,
+                                offer.get('management_fee', 0) or 0, 
                                 offer.get('tyres_cost', 0) or 0
                             ])
                             if val == 0: val = None
