@@ -676,6 +676,9 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
     
     # Fields that need summing
     service_rate_fields = ['maintenance_repair', 'roadside_assistance', 'insurance_cost', 'management_fee', 'tyres_cost']
+    
+    # Fields that should show 'MISSING' instead of 0
+    zero_means_missing_fields = ['maintenance_repair', 'roadside_assistance', 'management_fee', 'tyres_cost']
 
 
     for index, row in template_df.iterrows():
@@ -738,7 +741,11 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
                             else:
                                 val = None
                         else:
-                             val = offer.get(llm_field_name)
+                            val = offer.get(llm_field_name)
+                            # Custom check to handle LLM returning 0 for missing values
+                            if llm_field_name in zero_means_missing_fields and val == 0:
+                                val = "MISSING"
+
                 except (ValueError, TypeError):
                     val = "N/A"
             new_row.append(val if val is not None and val != '' else "MISSING")
