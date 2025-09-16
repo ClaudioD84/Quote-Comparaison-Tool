@@ -673,6 +673,10 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
     
     # Fields to be removed from the output
     fields_to_remove = ['Electricity cost*', 'EV charging station at home*', 'Green tax*']
+    
+    # Fields that need summing
+    service_rate_fields = ['maintenance_repair', 'roadside_assistance', 'insurance_cost', 'management_fee', 'tyres_cost']
+
 
     for index, row in template_df.iterrows():
         template_field = row['Field']
@@ -709,6 +713,16 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
                 new_row.append(total_price if total_price > 0 else None)
             final_report_df_rows.append(new_row)
             continue
+        
+        # Handle Total monthly service rate calculation
+        if template_field == 'Total monthly service rate':
+            new_row = [template_field]
+            for offer in offer_data_list:
+                total_sum = sum(offer.get(field, 0) or 0 for field in service_rate_fields)
+                new_row.append(total_sum if total_sum > 0 else "MISSING")
+            final_report_df_rows.append(new_row)
+            continue
+
 
         # Default behavior for regular data fields
         new_row = [template_field]
@@ -723,16 +737,6 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
                                 val = int(offer.get('offer_total_mileage') / (offer.get('offer_duration_months') / 12))
                             else:
                                 val = None
-                        elif template_field == 'Total monthly service rate':
-                            # Calculate sum for the specified lines, using 0 for missing values
-                            val = sum([
-                                offer.get('maintenance_repair', 0) or 0,
-                                offer.get('roadside_assistance', 0) or 0,
-                                offer.get('insurance_cost', 0) or 0,
-                                offer.get('management_fee', 0) or 0, 
-                                offer.get('tyres_cost', 0) or 0
-                            ])
-                            if val == 0: val = None
                         else:
                              val = offer.get(llm_field_name)
                 except (ValueError, TypeError):
