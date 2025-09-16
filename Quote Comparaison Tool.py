@@ -1,4 +1,4 @@
-"
+"""
 AI-Powered Fleet Leasing Offer Comparator - Streamlit App
 This version uses a Large Language Model (LLM) to intelligently parse PDF content.
 Author: Fleet Management Tool
@@ -7,7 +7,7 @@ Requirements:
 Notes:
   - This version uses a real API call to the Google Gemini API.
   - You must provide a valid API key to use the parsing functionality.
-"
+"""
 
 import io
 import re
