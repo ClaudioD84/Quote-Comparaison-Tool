@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-AI-Powered Fleet Leasing Offer Comparator - Streamlit App (Version 2.0 - Refactored)
+AI-Powered Fleet Leasing Offer Comparator - Streamlit App (Version 2.1 - Free Tier Optimized)
 This version incorporates best practices for performance, maintainability, and user experience.
+It is optimized to use the Gemini 1.0 Pro model for its generous free tier.
 
 Author: Fleet Management Tool (Refactored by Gemini)
-Date: 2024-05-22
+Date: 2025-09-16
 Requirements:
   streamlit, pandas, pdfplumber, python-dateutil, openpyxl, xlsxwriter, google-generativeai, difflib
 """
@@ -164,13 +165,13 @@ class LLMParser:
             response_schema=self.json_schema
         )
         self.model = genai.GenerativeModel(
-            model_name='gemini-1.5-pro-latest',
+            model_name='gemini-1.0-pro', # UPDATED to use model with more generous free tier
             generation_config=generation_config
         )
 
     def parse_text(self, text: str, filename: str) -> ParsedOffer:
         """Sends PDF text to the Gemini API for structured data extraction."""
-        logger.info(f"Sending text to Gemini 1.5 Pro for parsing file: {filename}")
+        logger.info(f"Sending text to Gemini for parsing file: {filename}")
         
         prompt_text = f"""
         You are a world-class financial analyst specializing in fleet leasing. Your task is to extract key data points from a vehicle leasing contract, regardless of the language or format.
@@ -384,7 +385,12 @@ def _prepare_report_dataframe(offers: List[ParsedOffer], user_mapping: Dict[str,
 def _insert_gap_analysis(report_df: pd.DataFrame, offers: List[ParsedOffer]) -> pd.DataFrame:
     """Inserts vehicle similarity and gap analysis into the report."""
     ref_offer, other_offers = offers[0], offers[1:]
-    insert_idx = report_df[report_df['Field'] == 'Total net investment'].index[0] + 1
+    
+    # Find insert index safely
+    idx_series = report_df[report_df['Field'] == 'Total net investment'].index
+    if idx_series.empty:
+        return report_df # Return original df if anchor not found
+    insert_idx = idx_series[0] + 1
     
     rows_to_insert = [
         [''] * len(report_df.columns),
@@ -400,14 +406,27 @@ def _add_cost_analysis(report_df: pd.DataFrame, offers: List[ParsedOffer]) -> pd
     """Appends the final cost analysis summary."""
     cost_data = OfferComparator(offers).calculate_total_costs()
     cost_df = pd.DataFrame(cost_data)
-    min_cost = cost_df['total_contract_cost'].min()
     
+    # Only proceed if cost calculation was successful
+    if 'total_contract_cost' in cost_df.columns and not cost_df['total_contract_cost'].isnull().all():
+        min_cost = cost_df['total_contract_cost'].min()
+        total_cost_row = ['Total Cost (excl. VAT)'] + cost_df['total_contract_cost'].tolist()
+        monthly_cost_row = ['Monthly Cost (excl. VAT)'] + cost_df['cost_per_month'].tolist()
+        winner_row = ['Winner'] + ["🥇 Winner" if cost == min_cost else "" for cost in cost_df['total_contract_cost']]
+    else:
+        # Handle case where cost calculation failed for all offers
+        num_offers = len(offers)
+        error_msg = "Calculation Failed"
+        total_cost_row = ['Total Cost (excl. VAT)'] + [error_msg] * num_offers
+        monthly_cost_row = ['Monthly Cost (excl. VAT)'] + [error_msg] * num_offers
+        winner_row = ['Winner'] + [""] * num_offers
+
     summary_rows = [
         [''] * len(report_df.columns),
         ['Cost Analysis (excl. VAT)'] + [''] * (len(report_df.columns) - 1),
-        ['Total Cost (excl. VAT)'] + cost_df['total_contract_cost'].tolist(),
-        ['Monthly Cost (excl. VAT)'] + cost_df['cost_per_month'].tolist(),
-        ['Winner'] + ["🥇 Winner" if cost == min_cost else "" for cost in cost_df['total_contract_cost']]
+        total_cost_row,
+        monthly_cost_row,
+        winner_row
     ]
     summary_df = pd.DataFrame(summary_rows, columns=report_df.columns)
     return pd.concat([report_df, summary_df], ignore_index=True)
@@ -426,16 +445,18 @@ def _format_excel_workbook(report_df: pd.DataFrame) -> io.BytesIO:
         wrap_format = workbook.add_format({'text_wrap': True, 'valign': 'top'})
         
         # Apply formatting
-        gap_row_idx = report_df[report_df['Field'] == 'Gap analysis'].index
-        if not gap_row_idx.empty:
-            worksheet.set_row(gap_row_idx[0], 150, wrap_format)
+        gap_row_idx_series = report_df[report_df['Field'] == 'Gap analysis'].index
+        if not gap_row_idx_series.empty:
+            worksheet.set_row(gap_row_idx_series[0], 150, wrap_format)
             
-        winner_row = report_df[report_df['Field'] == 'Winner'].values.flatten().tolist()
-        if "🥇 Winner" in winner_row:
-            winner_col_idx = winner_row.index("🥇 Winner")
-            for r_idx, field in enumerate(report_df['Field']):
-                if field in ['Total Cost (excl. VAT)', 'Monthly Cost (excl. VAT)', 'Winner', 'Leasing company']:
-                    worksheet.write(r_idx, winner_col_idx, report_df.iloc[r_idx, winner_col_idx], winner_format)
+        winner_row_series = report_df[report_df['Field'] == 'Winner'].values
+        if winner_row_series.size > 0:
+            winner_row = winner_row_series.flatten().tolist()
+            if "🥇 Winner" in winner_row:
+                winner_col_idx = winner_row.index("🥇 Winner")
+                for r_idx, field in enumerate(report_df['Field']):
+                    if field in ['Total Cost (excl. VAT)', 'Monthly Cost (excl. VAT)', 'Winner', 'Leasing company']:
+                        worksheet.write(r_idx, winner_col_idx, report_df.iloc[r_idx, winner_col_idx], winner_format)
 
         worksheet.set_column(0, 0, 40)
         worksheet.set_column(1, len(report_df.columns) - 1, 25)
@@ -464,6 +485,9 @@ def display_results_in_app(offers: List[ParsedOffer]):
         st.info("The details below show all data extracted by the AI from each document.")
         for offer in offers:
             with st.expander(f"📄 View Extracted Data for **{offer.filename}**"):
+                # Display a warning if the API call failed for this offer
+                if offer.warnings and "LLM parsing failed" in offer.warnings[0]:
+                    st.error(f"AI parsing failed for this document. Error: {offer.warnings[0]}")
                 st.json(asdict(offer))
 
     if len(offers) > 1:
@@ -489,13 +513,19 @@ def display_results_in_app(offers: List[ParsedOffer]):
                     st.warning(f"⚠️ {error}")
                 st.error("Financial comparison may be inaccurate due to inconsistencies.")
 
-            cost_df = pd.DataFrame(comparator.calculate_total_costs()).drop(columns=['error'], errors='ignore')
-            cost_df['rank'] = cost_df['total_contract_cost'].rank(method='min').astype(int)
-            st.dataframe(cost_df.style.format({
-                'total_contract_cost': '{:,.2f}',
-                'cost_per_month': '{:,.2f}',
-                'cost_per_km': '{:,.2f}',
-            }).highlight_min(subset=['total_contract_cost'], color='#D4EDDA'), use_container_width=True)
+            cost_df = pd.DataFrame(comparator.calculate_total_costs())
+
+            # Check to prevent crash if parsing fails
+            if 'total_contract_cost' in cost_df.columns:
+                cost_df['rank'] = cost_df['total_contract_cost'].rank(method='min').astype(int)
+                st.dataframe(cost_df.style.format({
+                    'total_contract_cost': '{:,.2f}',
+                    'cost_per_month': '{:,.2f}',
+                    'cost_per_km': '{:,.2f}',
+                }).highlight_min(subset=['total_contract_cost'], color='#D4EDDA'), use_container_width=True)
+            else:
+                st.error("🔴 Cost comparison could not be performed because the AI failed to extract financial data from the documents, likely due to an API error.")
+                st.dataframe(cost_df)
 
 def main():
     """Main function to run the Streamlit application."""
@@ -503,48 +533,36 @@ def main():
     st.title("🚗 AI-Powered Fleet Leasing Offer Comparator")
     st.markdown("Upload a **reference offer** and one or more **other offers** to automatically extract, compare, and analyze the key terms using AI.")
 
-    # --- Sidebar for Configuration ---
     with st.sidebar:
         st.header("⚙️ Configuration")
-        # Use st.secrets for production, but allow manual input for development
         api_key = st.text_input("Enter your Google AI API Key", type="password", help="For deployed apps, use st.secrets for security.")
         if not api_key:
             st.info("Get your API key from [Google AI Studio](https://aistudio.google.com/app/apikey).")
 
-        # Define the mapping from template fields to LLM dataclass fields
         mapping_suggestions = {
-            # Section Titles (use 'section_title' as a special key)
-            "Driver & Vehicle": "section_title",
-            "Quote number": "quote_number", "Driver name": "driver_name",
-            "Vehicle Description": "vehicle_description", "Manufacturer": "manufacturer",
-            "Model": "model", "Version": "version", "Internal colour": "internal_colour",
-            "External colour": "external_colour", "Fuel type": "fuel_type", "No. doors": "num_doors", "HP": "hp",
+            "Driver & Vehicle": "section_title", "Quote number": "quote_number", "Driver name": "driver_name",
+            "Vehicle Description": "vehicle_description", "Manufacturer": "manufacturer", "Model": "model", 
+            "Version": "version", "Internal colour": "internal_colour", "External colour": "external_colour", 
+            "Fuel type": "fuel_type", "No. doors": "num_doors", "HP": "hp", 
             "C02 emission WLTP (g/km)": "c02_emission", "Battery range": "battery_range",
-            "Equipment": "section_title",
-            "Additional equipment": "additional_equipment", # Special key for list aggregation
-            "Investment": "section_title",
-            "Vehicle list price (excl. VAT, excl. options)": "vehicle_price", "Options (excl. taxes)": "options_price",
-            "Accessories (excl. taxes)": "accessories_price", "Delivery cost": "delivery_cost",
-            "Registration tax": "registration_tax", "Total net investment": "total_net_investment",
-            "Taxation": "section_title",
-            "Taxation value": "taxation_value",
-            "Duration & Mileage": "section_title",
-            "Term (months)": "offer_duration_months", "Mileage per year (in km)": "offer_total_mileage", # This will be calculated
-            "Financial rate": "section_title",
-            "Monthly financial rate (depreciation + interest)": "depreciation_interest",
-            "Service rate": "section_title",
-            "Maintenance & repair": "maintenance_repair", "Insurance": "insurance_cost", "Green tax*": "green_tax",
-            "Management fee": "management_fee", "Tyres (summer and winter)": "tyres_cost",
-            "Road side assistance": "roadside_assistance",
-            "Total monthly service rate": "total_monthly_service_rate", # Special key for sum
-            "Monthly fee": "section_title",
-            "Total monthly lease ex. VAT": "total_monthly_lease",
-            "Excess / unused km": "section_title",
-            "Excess kilometers": "excess_mileage_rate", "Unused kilometers": "unused_mileage_rate"
+            "Equipment": "section_title", "Additional equipment": "additional_equipment",
+            "Investment": "section_title", "Vehicle list price (excl. VAT, excl. options)": "vehicle_price", 
+            "Options (excl. taxes)": "options_price", "Accessories (excl. taxes)": "accessories_price", 
+            "Delivery cost": "delivery_cost", "Registration tax": "registration_tax", 
+            "Total net investment": "total_net_investment",
+            "Taxation": "section_title", "Taxation value": "taxation_value",
+            "Duration & Mileage": "section_title", "Term (months)": "offer_duration_months", 
+            "Mileage per year (in km)": "offer_total_mileage",
+            "Financial rate": "section_title", "Monthly financial rate (depreciation + interest)": "depreciation_interest",
+            "Service rate": "section_title", "Maintenance & repair": "maintenance_repair", "Insurance": "insurance_cost", 
+            "Green tax*": "green_tax", "Management fee": "management_fee", "Tyres (summer and winter)": "tyres_cost",
+            "Road side assistance": "roadside_assistance", "Total monthly service rate": "total_monthly_service_rate",
+            "Monthly fee": "section_title", "Total monthly lease ex. VAT": "total_monthly_lease",
+            "Excess / unused km": "section_title", "Excess kilometers": "excess_mileage_rate", 
+            "Unused kilometers": "unused_mileage_rate"
         }
-        user_mapping = mapping_suggestions.copy() # Allow for future user edits if needed
+        user_mapping = mapping_suggestions.copy()
 
-    # --- Main Area for File Upload and Results ---
     st.header("📁 Upload Your Offers", divider='rainbow')
     col1, col2 = st.columns(2)
     with col1:
@@ -567,7 +585,6 @@ def main():
                 st.session_state.offers = offers
                 display_results_in_app(offers)
                 
-                # --- Generate Report Button ---
                 st.header("📄 Generate Final Report", divider='rainbow')
                 st.info("After reviewing the analysis above, click the button below to generate a formatted Excel spreadsheet with all the details.")
                 
