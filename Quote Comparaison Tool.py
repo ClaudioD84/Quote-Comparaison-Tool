@@ -1,6 +1,6 @@
 """
 AI-Powered Fleet Leasing Offer Comparator - Streamlit App
-This version uses a Large Language Model (LLM) to intelligently parse PDF content.
+This version uses a Large Large Model (LLM) to intelligently parse PDF content.
 Author: Fleet Management Tool
 Requirements:
   streamlit, pandas, numpy, pdfplumber, python-dateutil, xlsxwriter, google-generativeai
@@ -645,6 +645,19 @@ def consolidate_names(offers: List[ParsedOffer]) -> Tuple[str, str]:
 
     return common_customer, driver_name
 
+def _safe_float_convert(val: Any) -> Optional[float]:
+    """Converts a value to a float, handling common European number formats."""
+    if isinstance(val, (int, float)):
+        return float(val)
+    if isinstance(val, str):
+        # Handle European decimal format (comma)
+        val_cleaned = val.replace('.', '').replace(',', '.')
+        try:
+            return float(val_cleaned)
+        except (ValueError, TypeError):
+            return None
+    return None
+
 def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO, user_mapping: Dict[str, str]) -> io.BytesIO:
     """Generate Excel report based on the provided template and parsed offers."""
     try:
@@ -655,8 +668,10 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
     offer_data_list = []
     for offer in offers:
         offer_dict = asdict(offer)
-        upfront_costs = (offer.upfront_costs or 0) + (offer.deposit or 0) + (offer.admin_fees or 0)
-        offer_dict['total_contract_cost'] = (offer.monthly_rental * offer.offer_duration_months) + upfront_costs if offer.monthly_rental and offer.offer_duration_months else None
+        upfront_costs = (_safe_float_convert(offer.upfront_costs) or 0) + (_safe_float_convert(offer.deposit) or 0) + (_safe_float_convert(offer.admin_fees) or 0)
+        monthly_rental_val = _safe_float_convert(offer.monthly_rental)
+        total_cost = (monthly_rental_val * offer.offer_duration_months) + upfront_costs if monthly_rental_val and offer.offer_duration_months else None
+        offer_dict['total_contract_cost'] = total_cost
         offer_data_list.append(offer_dict)
 
     reference_offer = offers[0]
@@ -709,10 +724,10 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
         if template_field == 'Additional equipment price':
             new_row = [template_field]
             for offer in offers:
-                all_prices = [item.get('price', 0) or 0 for item in offer.options_list + offer.accessories_list]
+                all_prices = [_safe_float_convert(item.get('price', 0)) or 0 for item in offer.options_list + offer.accessories_list]
                 total_price = sum(all_prices)
                 if total_price == 0:
-                    total_price = (offer.options_price or 0) + (offer.accessories_price or 0)
+                    total_price = (_safe_float_convert(offer.options_price) or 0) + (_safe_float_convert(offer.accessories_price) or 0)
                 new_row.append(total_price if total_price > 0 else None)
             final_report_df_rows.append(new_row)
             continue
@@ -721,7 +736,7 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
         if template_field == 'Total monthly service rate':
             new_row = [template_field]
             for offer in offer_data_list:
-                total_sum = sum(offer.get(field, 0) or 0 for field in service_rate_fields)
+                total_sum = sum(_safe_float_convert(offer.get(field, 0)) or 0 for field in service_rate_fields)
                 new_row.append(total_sum if total_sum > 0 else "MISSING")
             final_report_df_rows.append(new_row)
             continue
