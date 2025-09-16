@@ -7,7 +7,7 @@ Requirements:
 Notes:
   - This version uses a real API call to the Google Gemini API.
   - You must provide a valid API key to use the parsing functionality.
-"""
+"
 
 import io
 import re
