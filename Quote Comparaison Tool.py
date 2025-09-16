@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-AI-Powered Fleet Leasing Offer Comparator - Streamlit App (Version 2.1 - Free Tier Optimized)
+AI-Powered Fleet Leasing Offer Comparator - Streamlit App (Version 2.2 - Flash Model)
 This version incorporates best practices for performance, maintainability, and user experience.
-It is optimized to use the Gemini 1.0 Pro model for its generous free tier.
+It uses the Gemini 1.5 Flash model for speed and a generous free tier.
 
 Author: Fleet Management Tool (Refactored by Gemini)
 Date: 2025-09-16
@@ -165,7 +165,7 @@ class LLMParser:
             response_schema=self.json_schema
         )
         self.model = genai.GenerativeModel(
-            model_name='gemini-1.0-pro', # UPDATED to use model with more generous free tier
+            model_name='gemini-1.5-flash-latest', # UPDATED to a model that supports JSON mode and has a generous free tier
             generation_config=generation_config
         )
 
