@@ -416,7 +416,7 @@ def main():
     mapping_suggestions['Monthly financial rate (depreciation + interest)'] = 'depreciation_interest'
     mapping_suggestions['Maintenance & repair'] = 'maintenance_repair'
     mapping_suggestions['Insurance'] = 'insurance_cost'
-    mapping_suggestions['Green tax*'] = 'green_tax'
+    # 'Green tax*' removed from here
     mapping_suggestions['Management fee'] = 'management_fee'
     mapping_suggestions['Tyres (summer and winter)'] = 'tyres_cost'
     mapping_suggestions['Road side assistance'] = 'roadside_assistance'
@@ -515,8 +515,8 @@ def create_default_template() -> io.BytesIO:
         'Taxation', 'Taxation value',
         'Duration & Mileage', 'Term (months)', 'Mileage per year (in km)',
         'Financial rate', 'Monthly financial rate (depreciation + interest)',
-        'Service rate', 'Maintenance & repair', 'Electricity cost*', 'EV charging station at home*', 
-        'Road side assistance', 'Insurance', 'Green tax*', 'Management fee', 'Tyres (summer and winter)', 
+        'Service rate', 'Maintenance & repair', 
+        'Road side assistance', 'Insurance', 'Management fee', 'Tyres (summer and winter)', 
         'Total monthly service rate',
         'Monthly fee', 'Total monthly lease ex. VAT',
         'Excess / unused km', 'Excess kilometers', 'Unused kilometers',
@@ -596,6 +596,9 @@ def get_offer_diff(offer1: ParsedOffer, offer2: ParsedOffer) -> str:
         elif field == 'fuel_type':
             if val1_str in ELECTRIC_SYNONYMS and val2_str in ELECTRIC_SYNONYMS:
                 continue
+        elif field == 'green_tax':
+            # Skip green tax from gap analysis as it's being removed from the report.
+            continue
 
         # Convert back to original case for the diff message
         val1_display = str(val1) if val1 is not None else "MISSING"
@@ -668,11 +671,14 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
         'Investment', 'Taxation', 'Duration & Mileage', 'Financial rate', 
         'Service rate', 'Monthly fee', 'Excess / unused km', 'Equipment'
     ]
+    
+    # Fields to be removed from the output
+    fields_to_remove = ['Electricity cost*', 'EV charging station at home*', 'Green tax*']
 
     for index, row in template_df.iterrows():
         template_field = row['Field']
 
-        if template_field in ['Leasing company', 'Winner']:
+        if template_field in ['Leasing company', 'Winner'] or template_field in fields_to_remove:
             continue
         
         # Handle title-only fields
@@ -721,8 +727,8 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
                         elif template_field == 'Total monthly service rate':
                             val = sum([
                                 offer.get('maintenance_repair', 0) or 0, offer.get('roadside_assistance', 0) or 0,
-                                offer.get('insurance_cost', 0) or 0, offer.get('green_tax', 0) or 0,
-                                offer.get('management_fee', 0) or 0, offer.get('tyres_cost', 0) or 0
+                                offer.get('insurance_cost', 0) or 0, offer.get('management_fee', 0) or 0, 
+                                offer.get('tyres_cost', 0) or 0
                             ])
                             if val == 0: val = None
                         else:
