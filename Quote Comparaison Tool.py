@@ -1,8 +1,8 @@
 """
 AI-Powered Fleet Leasing Offer Comparator - Streamlit App
-This version uses a Large Large Model (LLM) to intelligently parse PDF content.
+This version uses a Large Large Model (LLM) to intelligently parse PDF and Excel/CSV content.
 Author: Fleet Management Tool
-Version: 2.0 (Refactored for maintainability, performance, and UX)
+Version: 2.1 (Added support for Excel/CSV parsing and multi-vehicle report generation)
 Requirements:
   streamlit, pandas, numpy, pdfplumber, python-dateutil, xlsxwriter, openpyxl, google-generativeai
 Notes:
@@ -18,12 +18,13 @@ import logging
 import tempfile
 import json
 import traceback
-from typing import List, Dict, Any, Optional, Tuple, Union
+from typing import List, Dict, Any, Optional, Tuple, Union, Iterator
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, date
 import requests
 import difflib
 from collections import defaultdict
+import zipfile # NEW: Import for creating zip files
 
 import streamlit as st
 import pandas as pd
@@ -133,7 +134,7 @@ def normalize_currency(currency_str: Optional[str]) -> Optional[str]:
     return CURRENCY_MAP.get(currency_str.lower(), currency_str)
 
 class TextProcessor:
-    """Handles text extraction and normalization"""
+    """Handles text extraction and normalization from various file types""" # NEW: Updated docstring
 
     @staticmethod
     def extract_text_from_pdf(pdf_bytes: bytes) -> str:
@@ -146,6 +147,50 @@ class TextProcessor:
         except Exception as e:
             logger.error(f"PDF text extraction failed: {e}")
             return ""
+
+    # NEW: Added a new static method to parse spreadsheet files like Excel and CSV
+    @staticmethod
+    def extract_data_from_spreadsheet(file_bytes: bytes, filename: str) -> Iterator[Tuple[str, str]]:
+        """
+        Extracts data from an Excel or CSV file. It assumes a specific format where:
+        - Column 0 contains the field labels (e.g., 'Hersteller', 'Modell').
+        - Subsequent columns (from column 1 onwards) each represent a separate vehicle offer.
+        Yields a tuple containing a constructed offer name and the text blob for parsing.
+        """
+        try:
+            # Use pandas to read either Excel or CSV into a DataFrame
+            if filename.endswith('.csv'):
+                df = pd.read_csv(io.BytesIO(file_bytes), header=None, sep=',')
+            else:
+                df = pd.read_excel(io.BytesIO(file_bytes), header=None)
+
+            # Clean the DataFrame by removing rows and columns that are entirely empty
+            df.dropna(how='all', axis=0, inplace=True)
+            df.dropna(how='all', axis=1, inplace=True)
+            df = df.reset_index(drop=True)
+
+            # The first column contains the labels
+            labels = df.iloc[:, 0].astype(str)
+
+            # Each subsequent column is an offer
+            for i in range(1, df.shape[1]):
+                offer_data = df.iloc[:, i]
+                # Combine labels and data into a text block for the LLM
+                text_blob_lines = [f"{label}: {value}" for label, value in zip(labels, offer_data) if pd.notna(value) and str(value).strip()]
+                text_blob = "\n".join(text_blob_lines)
+                
+                # Try to find a model or description to name this specific offer
+                offer_name_series = offer_data[labels.str.contains('Modell|Model', case=False, na=False)]
+                offer_name = offer_name_series.iloc[0] if not offer_name_series.empty else f"Offer {i}"
+                
+                # Yield the constructed name and the text blob for the LLM to parse
+                yield f"{filename} ({offer_name})", text_blob
+                
+        except Exception as e:
+            logger.error(f"Spreadsheet parsing failed for {filename}: {e}")
+            # Yield nothing if parsing fails
+            return
+
 
 class LLMParser:
     """Uses the Gemini LLM to parse PDF text and return structured data."""
@@ -312,10 +357,12 @@ class OfferComparator:
         """Calculate total contract costs for all offers"""
         results = []
         for offer in self.offers:
-            if not offer.offer_duration_months or not offer.monthly_rental:
+            # NEW: Changed to use total_monthly_lease if available, otherwise fall back to monthly_rental
+            monthly_rate = offer.total_monthly_lease or offer.monthly_rental
+            if not offer.offer_duration_months or not monthly_rate:
                 results.append({'vendor': offer.vendor, 'error': 'Missing essential data for cost calculation'})
                 continue
-            monthly_total = offer.monthly_rental * offer.offer_duration_months
+            monthly_total = monthly_rate * offer.offer_duration_months
             upfront_total = (offer.upfront_costs or 0) + (offer.deposit or 0) + (offer.admin_fees or 0)
             total_cost = monthly_total + upfront_total
             results.append({
@@ -323,7 +370,7 @@ class OfferComparator:
                 'vehicle': offer.vehicle_description,
                 'duration_months': offer.offer_duration_months,
                 'total_mileage': offer.offer_total_mileage,
-                'monthly_rental': offer.monthly_rental,
+                'monthly_rental': monthly_rate,
                 'total_contract_cost': total_cost,
                 'cost_per_month': total_cost / offer.offer_duration_months,
                 'cost_per_km': total_cost / offer.offer_total_mileage if offer.offer_total_mileage else None,
@@ -346,8 +393,8 @@ def main():
     st.set_page_config(page_title="Fleet Leasing Offer Comparator", page_icon="🚗", layout="wide")
     st.title("🚗 AI-Powered Fleet Leasing Offer Comparator")
     st.markdown("""
-    This tool uses **AI** to analyze and compare leasing offers, handling various document layouts and languages.
-    Simply upload your PDF offers, and the app will extract the key data points automatically.
+    This tool uses **AI** to analyze and compare leasing offers from **PDF and Excel files**, handling various document layouts and languages.
+    Simply upload your offers, and the app will extract the key data points automatically.
     """)
 
     st.sidebar.header("⚙️ Configuration & Review")
@@ -367,18 +414,19 @@ def main():
 
     st.header("📁 Upload Offers")
 
+    # NEW: The file uploaders now accept PDF, XLSX, and CSV files.
     reference_file = st.file_uploader(
-        "Upload the Reference Offer (1 file)",
-        type=['pdf'],
+        "Upload the Reference Offer (1 file, PDF or Excel)",
+        type=['pdf', 'xlsx', 'csv'],
         accept_multiple_files=False,
-        help="Upload the PDF file that will be used as the benchmark for comparison"
+        help="Upload the file (PDF, XLSX, CSV) that will be used as the benchmark for comparison."
     )
 
     other_files = st.file_uploader(
-        "Upload Other Offers (1-9 files)",
-        type=['pdf'],
+        "Upload Other Offers (1-9 files, PDF or Excel)",
+        type=['pdf', 'xlsx', 'csv'],
         accept_multiple_files=True,
-        help="Upload the other PDF files you want to compare against the reference offer"
+        help="Upload the other files you want to compare against the reference offer."
     )
 
     if reference_file or other_files:
@@ -460,67 +508,119 @@ def main():
                 key=f"map_{template_field}"
             )
 
-    if st.sidebar.button("Generate & Download Report", help="Click to generate the final Excel report", type="primary"):
-        offers = st.session_state.get('offers')
-        if not offers:
-            st.error("❌ No offers found. Please upload files first.")
-            return
+    # NEW: Updated button logic to handle grouping and zip file generation
+    if st.sidebar.button("Generate & Download Reports", help="Click to generate the final Excel reports for each vehicle group", type="primary"):
+        all_offers = st.session_state.get('offers')
+        if not all_offers:
+            st.error("❌ No offers found. Please upload and process files first.")
+            st.stop()
 
-        comparator = OfferComparator(offers)
-        is_valid, errors = comparator.validate_offers()
+        # Group offers by vehicle model
+        grouped_offers = defaultdict(list)
+        for offer in all_offers:
+            model_key = offer.model or "Unknown Vehicle"
+            grouped_offers[model_key.strip()].append(offer)
 
-        if not is_valid:
-            st.error("❌ Validation Errors: Offers cannot be compared due to inconsistencies.")
-            for error in errors:
-                st.error(f"• {error}")
-            return
+        reports_to_zip = {}
+        processed_groups = 0
 
-        try:
-            with st.spinner("Generating Excel report..."):
-                template_buffer = create_default_template()
-                excel_buffer = generate_excel_report(offers, template_buffer, user_mapping)
-                common_customer, common_driver = consolidate_names(offers)
-                customer_name = common_customer if common_customer else "Customer"
-                driver_name = common_driver if common_driver else "Driver"
-                file_name = f"{customer_name}_{driver_name}".replace(" ", "_")
+        with st.spinner("Generating reports for each vehicle group..."):
+            for model, offers_group in grouped_offers.items():
+                if len(offers_group) < 2:
+                    st.warning(f"⚠️ Skipping '{model}' group: needs at least two offers to compare.")
+                    continue
 
-            st.sidebar.download_button(
-                label="⬇️ Download Excel Report",
-                data=excel_buffer,
-                file_name=f"{file_name}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-            st.sidebar.success("✅ Report generated successfully!")
-        except Exception as e:
-            st.error(f"❌ Error generating Excel report: {str(e)}")
-            logger.error(f"Excel generation error: {e}\n{traceback.format_exc()}")
+                comparator = OfferComparator(offers_group)
+                is_valid, errors = comparator.validate_offers()
+
+                if not is_valid:
+                    st.error(f"❌ Validation Errors for '{model}': Offers cannot be compared.")
+                    for error in errors:
+                        st.error(f"• {error}")
+                    continue
+
+                try:
+                    template_buffer = create_default_template()
+                    excel_buffer = generate_excel_report(offers_group, template_buffer, user_mapping)
+                    
+                    # Consolidate names for the filename
+                    common_customer, common_driver = consolidate_names(offers_group)
+                    customer_name = common_customer.replace(" ", "_") if common_customer else "Customer"
+                    driver_name = common_driver.replace(" ", "_") if common_driver else "Driver"
+                    model_name = model.replace(" ", "_")
+                    
+                    file_name = f"Comparison_{customer_name}_{model_name}.xlsx"
+                    reports_to_zip[file_name] = excel_buffer
+                    processed_groups += 1
+
+                except Exception as e:
+                    st.error(f"❌ Error generating report for '{model}': {str(e)}")
+                    logger.error(f"Excel generation error for {model}: {e}\n{traceback.format_exc()}")
+        
+        if not reports_to_zip:
+            st.warning("No valid groups found to generate reports.")
+            st.stop()
+
+        # Create a zip file in memory
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for file_name, excel_data in reports_to_zip.items():
+                zf.writestr(file_name, excel_data.getvalue())
+        
+        zip_buffer.seek(0)
+
+        # Provide the download button for the zip file
+        st.sidebar.download_button(
+            label=f"⬇️ Download All Reports ({processed_groups}) as .zip",
+            data=zip_buffer,
+            file_name="Leasing_Comparison_Reports.zip",
+            mime="application/zip"
+        )
+        st.sidebar.success("✅ Reports generated successfully!")
+
 
 @st.cache_data
 def process_offers_internal(_parser: LLMParser, uploaded_files: List[st.runtime.uploaded_file_manager.UploadedFile]) -> List[ParsedOffer]:
     """Helper function to process offers and return the list of parsed objects. Cached for performance."""
     offers = []
-    progress_bar = st.progress(0, "Initializing AI processing...")
+    # NEW: Modified to handle multiple offers from a single spreadsheet file
+    files_to_process = []
+    for f in uploaded_files:
+        if f.name.lower().endswith(('.xlsx', '.csv')):
+            # For spreadsheets, we might get multiple offers (text blobs)
+            pdf_bytes = f.getvalue()
+            for offer_name, text_blob in TextProcessor.extract_data_from_spreadsheet(pdf_bytes, f.name):
+                files_to_process.append({'name': offer_name, 'content': text_blob, 'type': 'text'})
+        elif f.name.lower().endswith('.pdf'):
+            # For PDFs, we get one text blob
+            files_to_process.append({'name': f.name, 'content': f.getvalue(), 'type': 'pdf'})
     
-    for i, uploaded_file in enumerate(uploaded_files):
-        if uploaded_file is None:
-            continue
-        progress_text = f"Processing {uploaded_file.name} with AI... ({i+1}/{len(uploaded_files)})"
-        progress_bar.progress((i + 1) / len(uploaded_files), text=progress_text)
+    progress_bar = st.progress(0, "Initializing AI processing...")
+    total_files = len(files_to_process)
+
+    for i, file_info in enumerate(files_to_process):
+        progress_text = f"Processing {file_info['name']} with AI... ({i+1}/{total_files})"
+        progress_bar.progress((i + 1) / total_files, text=progress_text)
         try:
-            pdf_bytes = uploaded_file.getvalue() # Use getvalue() for cached function
-            raw_text = TextProcessor.extract_text_from_pdf(pdf_bytes)
-            offer = _parser.parse_text(raw_text, uploaded_file.name)
-            offers.append(offer)
+            if file_info['type'] == 'pdf':
+                raw_text = TextProcessor.extract_text_from_pdf(file_info['content'])
+            else: # It's pre-processed text from a spreadsheet
+                raw_text = file_info['content']
+                
+            if raw_text:
+                offer = _parser.parse_text(raw_text, file_info['name'])
+                offers.append(offer)
         except Exception as e:
-            st.error(f"❌ Error processing {uploaded_file.name}: {str(e)}")
+            st.error(f"❌ Error processing {file_info['name']}: {str(e)}")
             logger.error(f"File processing error: {e}\n{traceback.format_exc()}")
-            
+
     progress_bar.empty()
 
     if not offers or not any(o.parsing_confidence > 0 for o in offers):
         st.error("❌ No offers could be processed successfully. Please check the file format or API key.")
         return []
     return offers
+
 
 def create_default_template() -> io.BytesIO:
     """Create a default Excel template file for demonstration."""
@@ -673,9 +773,20 @@ def _calculate_gap_analysis_rows(reference_offer: ParsedOffer, other_offers: Lis
 def _calculate_cost_analysis_df(offers: List[ParsedOffer], original_vendor_order: List[str]) -> pd.DataFrame:
     """Calculates the cost analysis section."""
     cost_data = OfferComparator(offers).calculate_total_costs()
-    cost_df = pd.DataFrame(cost_data).set_index('vendor').loc[original_vendor_order].reset_index()
-    min_cost = cost_df['total_contract_cost'].min()
+    cost_df = pd.DataFrame(cost_data)
     
+    # NEW: Handle cases where a vendor might be missing from cost analysis
+    if 'vendor' not in cost_df.columns:
+        return pd.DataFrame()
+        
+    cost_df = cost_df.set_index('vendor')
+    # Reindex to ensure the order matches the original column order, fill missing vendors
+    cost_df = cost_df.reindex(original_vendor_order)
+    cost_df = cost_df.reset_index()
+
+    total_costs = cost_df['total_contract_cost'].dropna()
+    min_cost = total_costs.min() if not total_costs.empty else np.inf
+
     rows = [
         [''] * (len(offers) + 1),
         ['Cost Analysis (excl. VAT)'] + [''] * len(offers),
@@ -684,6 +795,7 @@ def _calculate_cost_analysis_df(offers: List[ParsedOffer], original_vendor_order
         ['Winner'] + ["🥇 Winner" if cost == min_cost else "" for cost in cost_df['total_contract_cost']]
     ]
     return pd.DataFrame(rows)
+
 
 def _apply_excel_formatting(writer: pd.ExcelWriter, df: pd.DataFrame):
     """Applies all xlsxwriter formatting to the final report."""
@@ -722,7 +834,7 @@ def _apply_excel_formatting(writer: pd.ExcelWriter, df: pd.DataFrame):
                 curr_val_str = str(row[c_idx] or '').strip().lower()
                 fmt = formats['red']
                 if curr_val_str == ref_val_str: fmt = formats['green']
-                elif ref_val_str in curr_val_str or curr_val_str in ref_val_str: fmt = formats['orange']
+                elif ref_val_str and curr_val_str and (ref_val_str in curr_val_str or curr_val_str in ref_val_str): fmt = formats['orange']
                 worksheet.write(r_idx, c_idx, row[c_idx], fmt)
 
         # Taxation value formatting
@@ -761,8 +873,9 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
     # 3. Calculate and append cost analysis
     original_vendor_order = final_report_df.columns[1:].tolist()
     cost_df = _calculate_cost_analysis_df(offers, original_vendor_order)
-    cost_df.columns = final_report_df.columns
-    final_report_df = pd.concat([final_report_df, cost_df], ignore_index=True)
+    if not cost_df.empty:
+        cost_df.columns = final_report_df.columns
+        final_report_df = pd.concat([final_report_df, cost_df], ignore_index=True)
 
     # 4. Generate Excel file and apply formatting
     buffer = io.BytesIO()
@@ -791,59 +904,86 @@ def display_parsing_results(offers: List[ParsedOffer]):
 def display_gap_analysis(offers: List[ParsedOffer]):
     """Display gap and specification analysis in the Streamlit app."""
     st.header("🔍 Gap & Specification Analysis")
-    if len(offers) < 2:
-        st.info("Upload at least two offers to perform a gap analysis.")
+    
+    # NEW: Group offers by model for display
+    grouped_offers = defaultdict(list)
+    for offer in offers:
+        model_key = offer.model or "Unknown Vehicle"
+        grouped_offers[model_key.strip()].append(offer)
+
+    if not any(len(g) > 1 for g in grouped_offers.values()):
+        st.info("Upload at least two offers for the same vehicle to perform a gap analysis.")
         return
 
-    reference_offer = offers[0]
-    other_offers = offers[1:]
-    
-    st.subheader("Vehicle Description Similarity")
-    st.markdown(f"Comparing all offers against the reference: **{reference_offer.vehicle_description}**")
-    
-    cols = st.columns(len(other_offers))
-    for i, offer in enumerate(other_offers):
-        score = calculate_similarity_score(reference_offer.vehicle_description, offer.vehicle_description)
-        with cols[i]:
-            st.metric(label=f"vs. {offer.vendor}", value=f"{score:.1f}%")
-            
-    st.subheader("Key Differences Detected")
-    for offer in other_offers:
-        st.markdown(f"---")
-        st.markdown(f"#### Gaps between `{reference_offer.vendor}` and `{offer.vendor}`")
-        diff_text = get_offer_diff(reference_offer, offer)
-        if diff_text == "No significant differences found.":
-            st.success(f"✅ {diff_text}")
-        else:
-            st.text(diff_text)
+    for model, group in grouped_offers.items():
+        if len(group) < 2:
+            continue
+        
+        st.subheader(f"🚗 Analysis for: {model}")
+        reference_offer = group[0]
+        other_offers = group[1:]
+        
+        st.markdown(f"Comparing all offers against the reference: **{reference_offer.vehicle_description}** from **{reference_offer.vendor}**")
+        
+        cols = st.columns(len(other_offers))
+        for i, offer in enumerate(other_offers):
+            score = calculate_similarity_score(reference_offer.vehicle_description, offer.vehicle_description)
+            with cols[i]:
+                st.metric(label=f"vs. {offer.vendor}", value=f"{score:.1f}%")
+                
+        st.markdown("---")
+        st.markdown("#### Key Differences Detected")
+        for offer in other_offers:
+            st.markdown(f"##### Gaps between `{reference_offer.vendor}` and `{offer.vendor}`")
+            diff_text = get_offer_diff(reference_offer, offer)
+            if diff_text == "No significant differences found.":
+                st.success(f"✅ {diff_text}")
+            else:
+                st.text(diff_text)
+
             
 def display_cost_comparison(offers: List[ParsedOffer]):
     """Display cost comparison in the Streamlit app."""
     st.header("💰 Cost Comparison")
-    comparator = OfferComparator(offers)
-    is_valid, errors = comparator.validate_offers()
+    
+    # NEW: Group offers by model for display
+    grouped_offers = defaultdict(list)
+    for offer in offers:
+        model_key = offer.model or "Unknown Vehicle"
+        grouped_offers[model_key.strip()].append(offer)
 
-    if not is_valid:
-        st.warning("Offers may not be directly comparable due to inconsistencies.")
-        for error in errors:
-            st.error(f"• {error}")
-        return
-
-    report_df = comparator.generate_comparison_report()
-    if report_df.empty:
-        st.error("Could not generate a cost comparison report.")
+    if not any(len(g) > 1 for g in grouped_offers.values()):
+        st.info("Upload at least two offers for the same vehicle to perform a cost comparison.")
         return
         
-    # Reorder columns for better readability
-    display_cols = ['rank', 'vendor', 'total_contract_cost', 'cost_per_month', 'cost_per_km', 'vehicle', 'duration_months', 'total_mileage', 'currency']
-    report_df = report_df[[col for col in display_cols if col in report_df.columns]]
-    
-    st.dataframe(report_df.style.format({
-        'total_contract_cost': '{:,.2f}',
-        'cost_per_month': '{:,.2f}',
-        'cost_per_km': '{:,.4f}',
-        'parsing_confidence': '{:.1%}'
-    }), use_container_width=True)
+    for model, group in grouped_offers.items():
+        if len(group) < 2:
+            continue
+            
+        st.subheader(f"Vehicle: {model}")
+        comparator = OfferComparator(group)
+        is_valid, errors = comparator.validate_offers()
+
+        if not is_valid:
+            st.warning("This group may not be directly comparable due to inconsistencies.")
+            for error in errors:
+                st.error(f"• {error}")
+            continue
+
+        report_df = comparator.generate_comparison_report()
+        if report_df.empty:
+            st.error(f"Could not generate a cost comparison report for {model}.")
+            continue
+            
+        display_cols = ['rank', 'vendor', 'total_contract_cost', 'cost_per_month', 'cost_per_km', 'vehicle', 'duration_months', 'total_mileage', 'currency']
+        report_df = report_df[[col for col in display_cols if col in report_df.columns]]
+        
+        st.dataframe(report_df.style.format({
+            'total_contract_cost': '{:,.2f}',
+            'cost_per_month': '{:,.2f}',
+            'cost_per_km': '{:,.4f}',
+            'parsing_confidence': '{:.1%}'
+        }), use_container_width=True)
 
 
 if __name__ == '__main__':
