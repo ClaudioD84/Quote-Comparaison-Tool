@@ -4,7 +4,6 @@ import logging
 from typing import Dict, List, IO
 
 # --- Import Core Logic from Modules ---
-# CORRECTED: Changed relative imports to absolute
 from modules.llm_core import LLMParser
 from modules.models import ParsedOffer
 from modules.offer_comparator import OfferComparator, get_offer_diff, calculate_similarity_score
@@ -51,7 +50,6 @@ def process_offers_internal(
         try:
             raw_text = extract_text_from_pdf(uploaded_file)
             if raw_text and raw_text.strip():
-                # The LLM uses the single prompt to handle all vendor variations
                 offer = _parser.parse_text(raw_text, filename, prompt_template)
                 offers.append(offer)
             else:
@@ -77,20 +75,18 @@ def main():
     with st.sidebar:
         st.header("⚙️ Configuration")
         try:
-            api_key = st.secrets["GOOGLE_API_KEY"]
-            st.success("✅ API Key loaded from secrets.")
+            api_key = st.secrets["OPENAI_API_KEY"]
+            st.success("✅ OpenAI API Key loaded from secrets.")
         except (FileNotFoundError, KeyError):
-            st.warning("API Key not found in secrets.")
-            api_key = st.text_input("Enter your Google AI API Key", type="password")
+            st.warning("OpenAI API Key not found in secrets.")
+            api_key = st.text_input("Enter your OpenAI API Key", type="password")
 
         st.markdown("---")
         st.header("Recipe Selection")
         
-        # Dropdown for Customer
         customers = list(recipes.keys())
         selected_customer = st.selectbox("1. Select Customer", options=customers)
         
-        # Dropdown for Country, dependent on Customer
         countries = list(recipes.get(selected_customer, {}).keys())
         selected_country = st.selectbox("2. Select Country", options=countries)
 
@@ -100,7 +96,7 @@ def main():
     comp_files = st.file_uploader("2. Upload Competitor Offers (PDF)", type=['pdf'], accept_multiple_files=True)
 
     if st.button("🚀 Compare Offers", type="primary"):
-        if not api_key: st.error("🚨 Please enter your Google AI API key in the sidebar.")
+        if not api_key: st.error("🚨 Please enter your OpenAI API key in the sidebar.")
         elif not ref_file: st.warning("⚠️ Please upload a reference offer.")
         elif not comp_files: st.warning("⚠️ Please upload at least one competitor offer.")
         elif not selected_customer or not selected_country: st.warning("⚠️ Please select a customer and country.")
@@ -110,7 +106,6 @@ def main():
                     parser = LLMParser(api_key=api_key)
                     all_files = [ref_file] + comp_files
                     
-                    # Fetch the single, powerful prompt for the selected customer/country
                     prompt_template = recipes[selected_customer][selected_country]['prompt_template']
                     
                     st.session_state.offers = process_offers_internal(parser, all_files, prompt_template)
