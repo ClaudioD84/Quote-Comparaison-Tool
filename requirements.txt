@@ -9,3 +9,4 @@ openpyxl
 google-generativeai
 pytesseract>=0.3.8
 pdf2image>=1.16.0
+openai
