@@ -1,1 +1,233 @@
+import streamlit as st
+import pandas as pd
+import json
+from collections import defaultdict
+import io
+import zipfile
+
+# Import modules from the 'modules' directory
+from modules.models import ParsedOffer, asdict
+from modules.pdf_parser import extract_text_from_pdf
+from modules.llm_core import LLMManager
+from modules.offer_comparator import OfferComparator, get_offer_diff, calculate_similarity_score
+from modules.report_generator import generate_excel_report
+
+# --- Page Configuration ---
+st.set_page_config(page_title="Quote Comparison Tool", page_icon="🚗", layout="wide")
+
+# --- State Management ---
+if 'offers' not in st.session_state:
+    st.session_state.offers = []
+if 'vendor_mapping' not in st.session_state:
+    st.session_state.vendor_mapping = {}
+
+# --- Helper Functions ---
+@st.cache_data
+def load_recipes(filepath="config/recipes.json"):
+    """Loads and caches the recipe book from a JSON file."""
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        st.error(f"Error loading recipes from {filepath}: {e}")
+        return {}
+
+def get_recipe(recipes, customer, country, vendor):
+    """Retrieves a specific recipe with fallback to defaults."""
+    try:
+        # Most specific path
+        return recipes[customer][country][vendor]
+    except KeyError:
+        try:
+            # Fallback to default customer
+            return recipes["Default Customer"][country][vendor]
+        except KeyError:
+            # Fallback to absolute default
+            return recipes["Default Customer"]["Default"]["Default Vendor"]
+
+# --- Main Application UI ---
+st.title("🚗 AI-Powered Quote Comparison Tool")
+st.markdown("Upload a reference offer and one or more competitor offers. The tool uses a recipe-driven AI to extract data and provides a side-by-side comparison.")
+
+# --- Load Recipes ---
+recipes = load_recipes()
+if not recipes:
+    st.stop()
+
+# --- Sidebar Configuration ---
+with st.sidebar:
+    st.header("⚙️ Configuration")
+    api_key = st.text_input("Enter your Google AI API Key", type="password", help="Your key is required for the AI to analyze documents.")
+
+    st.markdown("---")
+    st.header("📖 Recipe Book Selection")
+    st.info("Select the context for processing. This determines which set of instructions the AI uses.")
+    
+    customers = list(recipes.keys())
+    selected_customer = st.selectbox("Select Customer", customers)
+    
+    countries = list(recipes.get(selected_customer, {}).keys())
+    if not countries:
+        # Fallback if customer has no specific countries
+        countries = list(recipes.get("Default Customer", {}).keys())
+    selected_country = st.selectbox("Select Country", countries)
+    
+    # Get all possible vendors for the vendor selection dropdowns later
+    all_vendors = set()
+    for cust_data in recipes.values():
+        for country_data in cust_data.values():
+            all_vendors.update(country_data.keys())
+    all_vendors = sorted(list(all_vendors))
+
+# --- File Uploading ---
+st.header("📁 Upload Your Leasing Offers")
+col1, col2 = st.columns(2)
+with col1:
+    reference_file = st.file_uploader("1. Upload Reference Offer", type=['pdf'])
+with col2:
+    competitor_files = st.file_uploader("2. Upload Competitor Offers", type=['pdf'], accept_multiple_files=True)
+
+uploaded_files = [f for f in [reference_file] + competitor_files if f]
+
+# --- Vendor Identification and Confirmation ---
+if uploaded_files and api_key:
+    st.header("🕵️‍♂️ Vendor Identification")
+    st.info("The AI has identified the vendors from the documents. Please review and correct if necessary before processing.")
+    
+    llm = LLMManager(api_key)
+    
+    for file in uploaded_files:
+        if file.name not in st.session_state.vendor_mapping:
+            with st.spinner(f"Identifying vendor for {file.name}..."):
+                text = extract_text_from_pdf(file.getvalue())
+                identified_vendor = llm.identify_vendor(text, recipes)
+                st.session_state.vendor_mapping[file.name] = identified_vendor
+    
+    for file in uploaded_files:
+        # Ensure the identified vendor is in the list of available vendors
+        current_vendor = st.session_state.vendor_mapping.get(file.name)
+        vendor_index = all_vendors.index(current_vendor) if current_vendor in all_vendors else 0
+        
+        # Display dropdown for user confirmation
+        confirmed_vendor = st.selectbox(
+            f"**{file.name}**",
+            options=all_vendors,
+            index=vendor_index,
+            key=f"vendor_{file.name}"
+        )
+        st.session_state.vendor_mapping[file.name] = confirmed_vendor
+
+# --- Processing and Display ---
+if st.button("🚀 Process and Compare Offers", type="primary", disabled=not uploaded_files or not api_key):
+    with st.spinner("AI is analyzing offers... This may take a moment."):
+        llm = LLMManager(api_key)
+        processed_offers = []
+        
+        progress_bar = st.progress(0, "Starting analysis...")
+        for i, file in enumerate(uploaded_files):
+            file_name = file.name
+            progress_text = f"Analyzing {file_name}..."
+            progress_bar.progress((i + 1) / len(uploaded_files), text=progress_text)
+
+            vendor = st.session_state.vendor_mapping[file_name]
+            recipe = get_recipe(recipes, selected_customer, selected_country, vendor)
+            prompt = recipe.get("prompt", "")
+            
+            text = extract_text_from_pdf(file.getvalue())
+            parsed_data = llm.parse_offer(text, prompt)
+            
+            # Add filename and confirmed vendor to the parsed data
+            parsed_data.filename = file_name
+            parsed_data.vendor = vendor
+            processed_offers.append(parsed_data)
+        
+        st.session_state.offers = processed_offers
+        progress_bar.empty()
+
+if st.session_state.offers:
+    st.success("✅ Analysis complete!")
+    offers = st.session_state.offers
+    
+    # Group offers by vehicle model for comparison
+    grouped_offers = defaultdict(list)
+    for offer in offers:
+        model_key = offer.model or "Unknown Vehicle"
+        grouped_offers[model_key.strip()].append(offer)
+
+    st.header("📊 Comparison Results")
+
+    for model, group in grouped_offers.items():
+        st.subheader(f"🚗 Comparison for: {model}")
+        if len(group) < 2:
+            st.warning("This vehicle has only one offer and cannot be compared.")
+            continue
+
+        comparator = OfferComparator(group)
+        is_valid, errors = comparator.validate_offers()
+        
+        if not is_valid:
+            st.error(f"Offers for {model} are not comparable:")
+            for error in errors:
+                st.markdown(f"- {error}")
+            continue
+
+        # --- Display Tabs ---
+        tab1, tab2, tab3 = st.tabs(["💰 Cost Summary", "🔍 Specification Gaps", "📋 Raw Data"])
+        
+        with tab1:
+            st.markdown("#### Cost and Ranking")
+            report_df = comparator.generate_comparison_report()
+            display_cols = ['rank', 'vendor', 'total_contract_cost', 'cost_per_month', 'cost_per_km', 'currency']
+            st.dataframe(report_df[display_cols].style.format({
+                'total_contract_cost': '{:,.2f}',
+                'cost_per_month': '{:,.2f}',
+                'cost_per_km': '{:,.4f}'
+            }), use_container_width=True)
+
+        with tab2:
+            st.markdown("#### Key Differences from Reference Offer")
+            reference_offer = group[0] # The first uploaded file is the reference
+            other_offers = group[1:]
+            for offer in other_offers:
+                st.markdown(f"##### Gaps between `{reference_offer.vendor}` and `{offer.vendor}`")
+                diff_text = get_offer_diff(reference_offer, offer)
+                if "No significant differences" in diff_text:
+                    st.success(f"✅ {diff_text}")
+                else:
+                    st.text(diff_text)
+
+        with tab3:
+            st.markdown("#### Detailed AI-Extracted Data")
+            for offer in group:
+                with st.expander(f"View data for {offer.filename} ({offer.vendor})"):
+                    st.json(asdict(offer))
+
+    # --- Report Generation ---
+    st.sidebar.markdown("---")
+    st.sidebar.header("⬇️ Download Reports")
+    if st.sidebar.button("Generate All Reports (.zip)"):
+        reports_to_zip = {}
+        for model, group in grouped_offers.items():
+            if len(group) > 1:
+                try:
+                    excel_buffer = generate_excel_report(group)
+                    reports_to_zip[f"Comparison_{model.replace(' ', '_')}.xlsx"] = excel_buffer
+                except Exception as e:
+                    st.sidebar.error(f"Failed to generate report for {model}: {e}")
+        
+        if reports_to_zip:
+            zip_buffer = io.BytesIO()
+            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+                for file_name, excel_data in reports_to_zip.items():
+                    zf.writestr(file_name, excel_data.getvalue())
+            zip_buffer.seek(0)
+            
+            st.sidebar.download_button(
+                label="Download All Reports",
+                data=zip_buffer,
+                file_name="Leasing_Comparison_Reports.zip",
+                mime="application/zip",
+                type="primary"
+            )
+            st.sidebar.success("Reports are ready!")
 
