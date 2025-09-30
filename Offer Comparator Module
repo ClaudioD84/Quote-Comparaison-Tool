@@ -1,0 +1,96 @@
+import pandas as pd
+import re
+import difflib
+from typing import List, Dict, Any, Tuple, Optional
+from .models import ParsedOffer
+
+class OfferComparator:
+    """Handles comparison and analysis of multiple ParsedOffer objects."""
+
+    def __init__(self, offers: List[ParsedOffer]):
+        self.offers = offers
+
+    def validate_offers(self) -> Tuple[bool, List[str]]:
+        """Checks if offers are suitable for a direct comparison."""
+        errors = []
+        if len(self.offers) < 2:
+            errors.append("At least two offers are required for comparison.")
+        
+        # Check for consistent currency
+        currencies = {o.currency for o in self.offers if o.currency}
+        if len(currencies) > 1:
+            errors.append(f"Mixed currencies detected: {', '.join(currencies)}")
+            
+        # Check for consistent duration and mileage
+        durations = {o.offer_duration_months for o in self.offers if o.offer_duration_months}
+        if len(durations) > 1:
+            errors.append(f"Mismatched contract durations: {', '.join(map(str, durations))} months")
+            
+        mileages = {o.offer_total_mileage for o in self.offers if o.offer_total_mileage}
+        if len(mileages) > 1:
+            errors.append(f"Mismatched contract mileages: {', '.join(map(str, mileages))} km/mi")
+            
+        return not errors, errors
+
+    def calculate_total_costs(self) -> List[Dict[str, Any]]:
+        """Calculates total contract costs for all offers."""
+        results = []
+        for offer in self.offers:
+            # Prioritize 'total_monthly_lease' but fall back to 'monthly_rental'
+            monthly_rate = offer.total_monthly_lease if offer.total_monthly_lease is not None else offer.monthly_rental
+            duration = offer.offer_duration_months
+            
+            if not duration or monthly_rate is None:
+                total_cost = float('inf')
+            else:
+                monthly_total = monthly_rate * duration
+                upfront_total = (offer.upfront_costs or 0) + (offer.deposit or 0)
+                total_cost = monthly_total + upfront_total
+            
+            results.append({
+                'vendor': offer.vendor,
+                'total_contract_cost': total_cost,
+                'cost_per_month': total_cost / duration if duration else 0,
+                'cost_per_km': total_cost / offer.offer_total_mileage if offer.offer_total_mileage else 0,
+                'currency': offer.currency
+            })
+        return sorted(results, key=lambda x: x.get('total_contract_cost', float('inf')))
+
+    def generate_comparison_report(self) -> pd.DataFrame:
+        """Generates a detailed comparison DataFrame."""
+        cost_data = self.calculate_total_costs()
+        df = pd.DataFrame(cost_data)
+        if not df.empty and 'total_contract_cost' in df.columns:
+            df['rank'] = df['total_contract_cost'].rank(method='min').astype(int)
+        return df
+
+def calculate_similarity_score(s1: Optional[str], s2: Optional[str]) -> float:
+    """Calculates a similarity score between two strings."""
+    s1_clean = re.sub(r'\W+', '', (s1 or "").lower())
+    s2_clean = re.sub(r'\W+', '', (s2 or "").lower())
+    return difflib.SequenceMatcher(None, s1_clean, s2_clean).ratio() * 100
+
+def get_offer_diff(ref_offer: ParsedOffer, comp_offer: ParsedOffer) -> str:
+    """Compares two offers and summarizes the key differences."""
+    diffs = []
+    
+    fields_to_check = [
+        'vehicle_description', 'manufacturer', 'model', 'version',
+        'fuel_type', 'c02_emission'
+    ]
+    for field in fields_to_check:
+        ref_val = getattr(ref_offer, field, None)
+        comp_val = getattr(comp_offer, field, None)
+        if ref_val != comp_val:
+            diffs.append(f"• {field.replace('_', ' ').title()}: {ref_val or 'N/A'} vs {comp_val or 'N/A'}")
+            
+    # Compare equipment lists
+    ref_equip = {item['name'].strip().lower() for item in ref_offer.options_list + ref_offer.accessories_list}
+    comp_equip = {item['name'].strip().lower() for item in comp_offer.options_list + comp_offer.accessories_list}
+    
+    if added := comp_equip - ref_equip:
+        diffs.append(f"• Equipment Added: {', '.join(sorted(list(added)))}")
+    if removed := ref_equip - comp_equip:
+        diffs.append(f"• Equipment Removed: {', '.join(sorted(list(removed)))}")
+        
+    return "\n".join(diffs) if diffs else "No significant differences found in specifications."
