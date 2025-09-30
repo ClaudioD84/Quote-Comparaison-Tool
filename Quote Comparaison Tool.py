@@ -2,7 +2,7 @@
 AI-Powered Fleet Leasing Offer Comparator - Streamlit App
 This version uses OpenAI's LLM to intelligently parse PDF (including scanned docs with OCR) and Excel/CSV content.
 Author: Fleet Management Tool
-Version: 3.1 (Added user input for API key as a fallback)
+Version: 3.2 (Added robustness to handle unexpected fields from AI response)
 Requirements:
   streamlit, pandas, numpy, pdfplumber, python-dateutil, xlsxwriter, openpyxl,
   openai, pytesseract, pdf2image, python-dotenv
@@ -20,9 +20,9 @@ import logging
 import tempfile
 import json
 import traceback
-import os # NEW: For handling environment variables
+import os
 from typing import List, Dict, Any, Optional, Tuple, Union, Iterator
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, fields # MODIFIED: Import 'fields'
 from datetime import datetime, date
 import requests
 import difflib
@@ -38,14 +38,12 @@ from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.styles import Font
 import xlsxwriter
-import openai # NEW: Import OpenAI library
-from dotenv import load_dotenv # NEW: For loading .env file
+import openai
+from dotenv import load_dotenv
 
-# NEW: OCR Imports
 import pytesseract
 from pdf2image import convert_from_bytes
 
-# NEW: Load environment variables from .env file for local development
 load_dotenv()
 
 
@@ -64,7 +62,7 @@ def setup_logging():
 
 logger = setup_logging()
 
-# Currency mapping dictionary for European currencies (Unchanged)
+# Currency mapping dictionary (Unchanged)
 CURRENCY_MAP = {
     'kr.': 'DKK',
     'kr': 'DKK',
@@ -84,7 +82,7 @@ CURRENCY_MAP = {
 
 @dataclass
 class ParsedOffer:
-    """Standardized structure for parsed leasing offer data. Remains unchanged."""
+    """Standardized structure for parsed leasing offer data. (Unchanged)"""
     filename: str
     vendor: Optional[str] = None
     vehicle_description: Optional[str] = None
@@ -141,11 +139,10 @@ def normalize_currency(currency_str: Optional[str]) -> Optional[str]:
     return CURRENCY_MAP.get(currency_str.lower(), currency_str)
 
 class TextProcessor:
-    """Handles text extraction from PDFs (with OCR fallback) and spreadsheets."""
+    """Handles text extraction from PDFs (with OCR fallback) and spreadsheets. (Unchanged)"""
 
     @staticmethod
     def _perform_ocr(pdf_bytes: bytes) -> str:
-        """Performs OCR on a PDF byte stream."""
         try:
             logger.info("Falling back to OCR for PDF text extraction.")
             images = convert_from_bytes(pdf_bytes)
@@ -161,43 +158,32 @@ class TextProcessor:
 
     @staticmethod
     def extract_text_from_pdf(pdf_bytes: bytes) -> str:
-        """
-        Extract text from PDF. Tries direct extraction first, then falls back to OCR if needed.
-        """
         full_text = ""
-        # 1. Try direct text extraction with pdfplumber
         try:
             with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
                 pages_text = [page.extract_text() or "" for page in pdf.pages]
                 full_text = "\n".join(pages_text).strip()
         except Exception as e:
             logger.error(f"PDF text extraction with pdfplumber failed: {e}")
-            full_text = "" # Ensure text is empty to trigger OCR
-
-        # 2. If direct extraction yields little text, assume it's scanned and use OCR
+            full_text = ""
         if len(full_text) < 100:
             logger.warning("Low text content from direct extraction, attempting OCR.")
             full_text = TextProcessor._perform_ocr(pdf_bytes)
-        
         if not full_text:
             logger.error("Failed to extract any text from the PDF, both direct and OCR methods failed.")
-
         return full_text
 
     @staticmethod
     def extract_data_from_spreadsheet(file_bytes: bytes, filename: str) -> Iterator[Tuple[str, str]]:
-        """Extracts data from an Excel or CSV file. (Unchanged)"""
         try:
             if filename.endswith('.csv'):
                 df = pd.read_csv(io.BytesIO(file_bytes), header=None, sep=',')
             else:
                 df = pd.read_excel(io.BytesIO(file_bytes), header=None)
-
             df.dropna(how='all', axis=0, inplace=True)
             df.dropna(how='all', axis=1, inplace=True)
             df = df.reset_index(drop=True)
             labels = df.iloc[:, 0].astype(str)
-
             for i in range(1, df.shape[1]):
                 offer_data = df.iloc[:, i]
                 text_blob_lines = [f"{label}: {value}" for label, value in zip(labels, offer_data) if pd.notna(value) and str(value).strip()]
@@ -205,7 +191,6 @@ class TextProcessor:
                 offer_name_series = offer_data[labels.str.contains('Modell|Model', case=False, na=False)]
                 offer_name = offer_name_series.iloc[0] if not offer_name_series.empty else f"Offer {i}"
                 yield f"{filename} ({offer_name})", text_blob
-                
         except Exception as e:
             logger.error(f"Spreadsheet parsing failed for {filename}: {e}")
             return
@@ -215,12 +200,7 @@ class OpenAIParser:
     """Uses an OpenAI LLM to parse text and return structured data."""
 
     def __init__(self, api_key: str, model_name: str = "gpt-4o"):
-        """
-        Initializes the OpenAI client.
-        Args:
-            api_key (str): The OpenAI API key.
-            model_name (str): The model to use for parsing.
-        """
+        """Initializes the OpenAI client. (Unchanged)"""
         self.model_name = model_name
         if not api_key:
             raise ValueError("An OpenAI API key is required.")
@@ -268,10 +248,23 @@ class OpenAIParser:
             )
             
             extracted_data = json.loads(response.choices[0].message.content)
-            extracted_data['options_list'] = extracted_data.get('options_list') or []
-            extracted_data['accessories_list'] = extracted_data.get('accessories_list') or []
 
-            return ParsedOffer(filename=filename, **extracted_data)
+            # --- START: ROBUSTNESS FIX ---
+            # Get the set of valid field names from the ParsedOffer dataclass.
+            valid_field_names = {f.name for f in fields(ParsedOffer)}
+
+            # Filter the dictionary from the LLM to only include valid keys. This
+            # prevents a TypeError if the AI returns an unexpected field.
+            filtered_data = {
+                key: value for key, value in extracted_data.items() if key in valid_field_names
+            }
+
+            # Ensure list fields always exist to prevent downstream errors.
+            filtered_data.setdefault('options_list', [])
+            filtered_data.setdefault('accessories_list', [])
+
+            return ParsedOffer(filename=filename, **filtered_data)
+            # --- END: ROBUSTNESS FIX ---
 
         except openai.APIError as e:
             logger.error(f"OpenAI API Error for {filename}: {str(e)}")
@@ -290,6 +283,8 @@ class OpenAIParser:
                 parsing_confidence=0.1
             )
 
+# All remaining code below this point is unchanged.
+
 class OfferComparator:
     """Handles comparison and analysis of multiple offers (Unchanged)"""
 
@@ -302,24 +297,19 @@ class OfferComparator:
         if len(self.offers) < 2:
             errors.append("Need at least 2 offers for comparison")
             return False, errors
-
         normalized_currencies = [normalize_currency(o.currency) for o in self.offers if o.currency]
         if len(set(normalized_currencies)) > 1:
             errors.append(f"Mixed currencies detected: {set(normalized_currencies)}")
-
         durations = [o.offer_duration_months for o in self.offers if o.offer_duration_months]
         mileages = [o.offer_total_mileage for o in self.offers if o.offer_total_mileage]
-
         if len(durations) != len(self.offers) or None in durations:
             errors.append("Some offers are missing contract duration.")
         elif len(set(durations)) > 1:
             errors.append(f"Contract durations don't match: {set(durations)}")
-
         if len(mileages) != len(self.offers) or None in mileages:
             errors.append("Some offers are missing mileage information.")
         elif len(set(mileages)) > 1:
             errors.append(f"Contract mileages don't match: {set(mileages)}")
-
         return len(errors) == 0, errors
 
     def calculate_total_costs(self) -> List[Dict[str, Any]]:
@@ -366,8 +356,6 @@ def main():
     """)
 
     st.sidebar.header("⚙️ Configuration & Review")
-
-    # --- NEW: Handle OpenAI API key with user input fallback ---
     openai_api_key = os.getenv("OPENAI_API_KEY")
     if openai_api_key:
         st.sidebar.success("✅ OpenAI API Key loaded from environment.", icon=" L")
@@ -378,40 +366,32 @@ def main():
             type="password",
             help="Your key is stored temporarily and not saved."
         )
-
     selected_model = st.sidebar.selectbox(
         "Select OpenAI Model",
         ("gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo"),
         help="Choose the OpenAI model for parsing. `gpt-4o` is recommended for best results."
     )
-
     st.header("📁 Upload Offers")
-
     reference_file = st.file_uploader(
         "Upload the Reference Offer (1 file, PDF or Excel)",
         type=['pdf', 'xlsx', 'csv'],
         accept_multiple_files=False,
         help="Upload the file (PDF, XLSX, CSV) that will be used as the benchmark for comparison."
     )
-
     other_files = st.file_uploader(
         "Upload Other Offers (1-9 files, PDF or Excel)",
         type=['pdf', 'xlsx', 'csv'],
         accept_multiple_files=True,
         help="Upload the other files you want to compare against the reference offer."
     )
-
     if reference_file or other_files:
         uploaded_files = [f for f in [reference_file] + other_files if f is not None]
         current_file_names = [f.name for f in uploaded_files]
-
         if 'offers' not in st.session_state or st.session_state.get('uploaded_files') != current_file_names:
             if not openai_api_key:
                 st.error("❌ Please enter your OpenAI API Key in the sidebar to proceed.")
                 st.stop()
-
             try:
-                # NEW: Pass the API key to the parser
                 parser = OpenAIParser(api_key=openai_api_key, model_name=selected_model)
                 st.session_state.offers = process_offers_internal(_parser=parser, uploaded_files=uploaded_files)
                 st.session_state.uploaded_files = current_file_names
@@ -421,32 +401,51 @@ def main():
             except openai.AuthenticationError:
                 st.error("❌ Authentication Error: The OpenAI API Key you provided is invalid. Please check and re-enter it.")
                 st.stop()
-
-
         if st.session_state.get('offers'):
             offers = st.session_state.offers
             tab1, tab2, tab3 = st.tabs(["📊 Parsing Results", "🔍 Gap & Spec Analysis", "💰 Cost Comparison"])
-
             with tab1:
                 display_parsing_results(offers, selected_model)
-
             with tab2:
                 display_gap_analysis(offers)
-
             with tab3:
                 display_cost_comparison(offers)
-
-    # Sidebar for field mapping (Unchanged)
     st.sidebar.subheader("Review AI-Suggested Mappings")
     st.sidebar.markdown("Review the AI's guesses for each field. You can edit them if needed.")
-    # ... (rest of the mapping UI is identical to the original script)
     mapping_suggestions = defaultdict(str)
     mapping_suggestions['Quote number'] = 'quote_number'
     mapping_suggestions['Driver name'] = 'driver_name'
     mapping_suggestions['Vehicle Description'] = 'vehicle_description'
-    #...(rest of mapping_suggestions remains the same)...
+    mapping_suggestions['Manufacturer'] = 'manufacturer'
+    mapping_suggestions['Model'] = 'model'
+    mapping_suggestions['Version'] = 'version'
+    mapping_suggestions['Internal colour'] = 'internal_colour'
+    mapping_suggestions['External colour'] = 'external_colour'
+    mapping_suggestions['Fuel type'] = 'fuel_type'
+    mapping_suggestions['No. doors'] = 'num_doors'
+    mapping_suggestions['HP'] = 'hp'
+    mapping_suggestions['C02 emission WLTP (g/km)'] = 'c02_emission'
+    mapping_suggestions['Battery range'] = 'battery_range'
+    mapping_suggestions['Vehicle list price (excl. VAT, excl. options)'] = 'vehicle_price'
+    mapping_suggestions['Options (excl. taxes)'] = 'options_price'
+    mapping_suggestions['Accessories (excl. taxes)'] = 'accessories_price'
+    mapping_suggestions['Delivery cost'] = 'delivery_cost'
+    mapping_suggestions['Registration tax'] = 'registration_tax'
+    mapping_suggestions['Total net investment'] = 'total_net_investment'
+    mapping_suggestions['Taxation value'] = 'taxation_value'
+    mapping_suggestions['Term (months)'] = 'offer_duration_months'
+    mapping_suggestions['Mileage per year (in km)'] = 'offer_total_mileage'
+    mapping_suggestions['Monthly financial rate (depreciation + interest)'] = 'depreciation_interest'
+    mapping_suggestions['Maintenance & repair'] = 'maintenance_repair'
+    mapping_suggestions['Insurance'] = 'insurance_cost'
+    mapping_suggestions['Green tax*'] = 'green_tax'
+    mapping_suggestions['Management fee'] = 'management_fee'
+    mapping_suggestions['Tyres (summer and winter)'] = 'tyres_cost'
+    mapping_suggestions['Road side assistance'] = 'roadside_assistance'
+    mapping_suggestions['Total monthly service rate'] = 'total_monthly_service_rate'
+    mapping_suggestions['Total monthly lease ex. VAT'] = 'total_monthly_lease'
+    mapping_suggestions['Excess kilometers'] = 'excess_mileage_rate'
     mapping_suggestions['Unused kilometers'] = 'unused_mileage_rate'
-
     user_mapping = {}
     with st.sidebar.expander("📝 Field Mappings"):
         for template_field, suggested_llm_field in mapping_suggestions.items():
@@ -455,38 +454,29 @@ def main():
                 value=suggested_llm_field,
                 key=f"map_{template_field}"
             )
-
-    # Report generation logic (Unchanged)
     if st.sidebar.button("Generate & Download Reports", help="Click to generate the final Excel reports for each vehicle group", type="primary"):
-        # ... (This entire block is identical to the original script)
         all_offers = st.session_state.get('offers')
         if not all_offers:
             st.error("❌ No offers found. Please upload and process files first.")
             st.stop()
-
         grouped_offers = defaultdict(list)
         for offer in all_offers:
             model_key = offer.model or "Unknown Vehicle"
             grouped_offers[model_key.strip()].append(offer)
-
         reports_to_zip = {}
         processed_groups = 0
-
         with st.spinner("Generating reports for each vehicle group..."):
             for model, offers_group in grouped_offers.items():
                 if len(offers_group) < 2:
                     st.warning(f"⚠️ Skipping '{model}' group: needs at least two offers to compare.")
                     continue
-
                 comparator = OfferComparator(offers_group)
                 is_valid, errors = comparator.validate_offers()
-
                 if not is_valid:
                     st.error(f"❌ Validation Errors for '{model}': Offers cannot be compared.")
                     for error in errors:
                         st.error(f"• {error}")
                     continue
-
                 try:
                     template_buffer = create_default_template()
                     excel_buffer = generate_excel_report(offers_group, template_buffer, user_mapping)
@@ -497,21 +487,17 @@ def main():
                     file_name = f"Comparison_{customer_name}_{model_name}.xlsx"
                     reports_to_zip[file_name] = excel_buffer
                     processed_groups += 1
-
                 except Exception as e:
                     st.error(f"❌ Error generating report for '{model}': {str(e)}")
                     logger.error(f"Excel generation error for {model}: {e}\n{traceback.format_exc()}")
-        
         if not reports_to_zip:
             st.warning("No valid groups found to generate reports.")
             st.stop()
-
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
             for file_name, excel_data in reports_to_zip.items():
                 zf.writestr(file_name, excel_data.getvalue())
         zip_buffer.seek(0)
-
         st.sidebar.download_button(
             label=f"⬇️ Download All Reports ({processed_groups}) as .zip",
             data=zip_buffer,
@@ -523,7 +509,7 @@ def main():
 
 @st.cache_data
 def process_offers_internal(_parser: OpenAIParser, uploaded_files: List[st.runtime.uploaded_file_manager.UploadedFile]) -> List[ParsedOffer]:
-    """Helper function to process offers. Updated to use the new TextProcessor."""
+    """Helper function to process offers. (Unchanged)"""
     offers = []
     files_to_process = []
     for f in uploaded_files:
@@ -533,10 +519,8 @@ def process_offers_internal(_parser: OpenAIParser, uploaded_files: List[st.runti
                 files_to_process.append({'name': offer_name, 'content': text_blob, 'type': 'text'})
         elif f.name.lower().endswith('.pdf'):
             files_to_process.append({'name': f.name, 'content': f.getvalue(), 'type': 'pdf'})
-    
     progress_bar = st.progress(0, "Initializing AI processing...")
     total_files = len(files_to_process)
-
     for i, file_info in enumerate(files_to_process):
         progress_text = f"Processing {file_info['name']} with AI... ({i+1}/{total_files})"
         progress_bar.progress((i + 1) / total_files, text=progress_text)
@@ -545,26 +529,20 @@ def process_offers_internal(_parser: OpenAIParser, uploaded_files: List[st.runti
                 raw_text = TextProcessor.extract_text_from_pdf(file_info['content'])
             else:
                 raw_text = file_info['content']
-                
             if raw_text:
                 offer = _parser.parse_text(raw_text, file_info['name'])
                 offers.append(offer)
         except Exception as e:
             st.error(f"❌ Error processing {file_info['name']}: {str(e)}")
             logger.error(f"File processing error: {e}\n{traceback.format_exc()}")
-
     progress_bar.empty()
-
     if not offers or not any(o.parsing_confidence > 0 for o in offers):
         st.error("❌ No offers could be processed successfully. Please check the file format or API key.")
         return []
     return offers
 
-# The rest of the script contains helper functions for report generation and display.
-# These functions are all UNCHANGED from the previous version.
-
 def create_default_template() -> io.BytesIO:
-    # ... (Unchanged)
+    """Creates a default template. (Unchanged)"""
     fields = [
         'Quote number', 'Driver name', 'Vehicle Description', 'Manufacturer', 'Model',
         'Version', 'Internal colour', 'External colour', 'Fuel type',
@@ -591,25 +569,23 @@ def create_default_template() -> io.BytesIO:
     return buffer
 
 def calculate_similarity_score(s1: str, s2: str) -> float:
-    # ... (Unchanged)
+    """Calculates similarity score. (Unchanged)"""
     def preprocess(text: str) -> str:
         text = text.lower()
         text = re.sub(r'[^a-z0-9\s]', '', text)
         common_words = {'el', 'km', 'h', 'hp', 'd', 'f', 'gs', 'sky', 'hk', 'auto', 'farve', 'color'}
         tokens = [word for word in text.split() if word not in common_words]
         return " ".join(tokens)
-
     s1_preprocessed = preprocess(str(s1 or ''))
     s2_preprocessed = preprocess(str(s2 or ''))
     matcher = difflib.SequenceMatcher(None, s1_preprocessed, s2_preprocessed)
     return matcher.ratio() * 100
 
 def get_offer_diff(offer1: ParsedOffer, offer2: ParsedOffer) -> str:
-    # ... (Unchanged)
+    """Compares two offers. (Unchanged)"""
     diff_summary = []
     SIMILARITY_THRESHOLD = 90.0
     ELECTRIC_SYNONYMS = {'bev', 'electric', 'battery electric vehicle', 'electricity'}
-
     fields_to_compare = [
         'vehicle_description', 'manufacturer', 'model', 'version',
         'internal_colour', 'external_colour', 'offer_duration_months', 
@@ -619,25 +595,21 @@ def get_offer_diff(offer1: ParsedOffer, offer2: ParsedOffer) -> str:
         val1, val2 = getattr(offer1, field), getattr(offer2, field)
         val1_str, val2_str = str(val1 or '').strip().lower(), str(val2 or '').strip().lower()
         if val1_str == val2_str: continue
-        
         if field in ['vehicle_description', 'version'] and (val1_str in val2_str or val2_str in val1_str or calculate_similarity_score(val1_str, val2_str) >= SIMILARITY_THRESHOLD): continue
         if field == 'currency' and normalize_currency(val1_str) == normalize_currency(val2_str): continue
         if field == 'fuel_type' and val1_str in ELECTRIC_SYNONYMS and val2_str in ELECTRIC_SYNONYMS: continue
         if field == 'green_tax': continue
-
         val1_display = str(val1) if val1 is not None else "MISSING"
         val2_display = str(val2) if val2 is not None else "MISSING"
         diff_summary.append(f"• {field.replace('_', ' ').title()}: {val1_display} vs {val2_display}")
-
     equip1 = {item['name'].strip() for item in offer1.options_list + offer1.accessories_list}
     equip2 = {item['name'].strip() for item in offer2.options_list + offer2.accessories_list}
     if added := equip2 - equip1: diff_summary.append(f"• Equipment Added: {', '.join(sorted(list(added)))}")
     if removed := equip1 - equip2: diff_summary.append(f"• Equipment Removed: {', '.join(sorted(list(removed)))}")
-
     return "\n".join(diff_summary) if diff_summary else "No significant differences found."
 
 def consolidate_names(offers: List[ParsedOffer]) -> Tuple[str, str]:
-    # ... (Unchanged)
+    """Consolidates names. (Unchanged)"""
     driver_name = next((o.driver_name for o in offers if o.driver_name), None)
     customer_names = [o.customer for o in offers if o.customer]
     common_customer = None
@@ -647,7 +619,7 @@ def consolidate_names(offers: List[ParsedOffer]) -> Tuple[str, str]:
     return common_customer, driver_name
 
 def _safe_float_convert(val: Any) -> Optional[float]:
-    # ... (Unchanged)
+    """Converts value to float. (Unchanged)"""
     if isinstance(val, (int, float)): return float(val)
     if isinstance(val, str):
         try: return float(val.replace('.', '').replace(',', '.'))
@@ -655,7 +627,7 @@ def _safe_float_convert(val: Any) -> Optional[float]:
     return None
 
 def _prepare_main_data(offers: List[ParsedOffer], template_df: pd.DataFrame, user_mapping: Dict[str, str]) -> pd.DataFrame:
-    # ... (Unchanged)
+    """Prepares main data for report. (Unchanged)"""
     offer_data_list = [asdict(offer) for offer in offers]
     vendors = [offer.get('vendor', 'Unknown Vendor') for offer in offer_data_list]
     final_rows = [['Leasing company'] + vendors]
@@ -696,7 +668,7 @@ def _prepare_main_data(offers: List[ParsedOffer], template_df: pd.DataFrame, use
     return pd.DataFrame(final_rows, columns=['Field'] + vendors)
 
 def _calculate_gap_analysis_rows(reference_offer: ParsedOffer, other_offers: List[ParsedOffer], num_vendors: int) -> List[List[Any]]:
-    # ... (Unchanged)
+    """Calculates gap analysis. (Unchanged)"""
     if not other_offers: return []
     return [
         [''] * (num_vendors + 1),
@@ -706,7 +678,7 @@ def _calculate_gap_analysis_rows(reference_offer: ParsedOffer, other_offers: Lis
     ]
 
 def _calculate_cost_analysis_df(offers: List[ParsedOffer], original_vendor_order: List[str]) -> pd.DataFrame:
-    # ... (Unchanged)
+    """Calculates cost analysis. (Unchanged)"""
     cost_data = OfferComparator(offers).calculate_total_costs()
     cost_df = pd.DataFrame(cost_data)
     if 'vendor' not in cost_df.columns: return pd.DataFrame()
@@ -725,7 +697,7 @@ def _calculate_cost_analysis_df(offers: List[ParsedOffer], original_vendor_order
     return pd.DataFrame(rows)
 
 def _apply_excel_formatting(writer: pd.ExcelWriter, df: pd.DataFrame):
-    # ... (Unchanged)
+    """Applies excel formatting. (Unchanged)"""
     workbook = writer.book
     worksheet = writer.sheets['Quotation']
     formats = {
@@ -767,7 +739,7 @@ def _apply_excel_formatting(writer: pd.ExcelWriter, df: pd.DataFrame):
     for i in range(1, len(df.columns)): worksheet.set_column(i, i, 25)
 
 def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO, user_mapping: Dict[str, str]) -> io.BytesIO:
-    # ... (Unchanged)
+    """Generates excel report. (Unchanged)"""
     template_df = pd.read_excel(template_buffer)
     final_report_df = _prepare_main_data(offers, template_df, user_mapping)
     if len(offers) > 1:
@@ -790,7 +762,7 @@ def generate_excel_report(offers: List[ParsedOffer], template_buffer: io.BytesIO
     return buffer
 
 def display_parsing_results(offers: List[ParsedOffer], model_name: str):
-    """Display parsing results summary in the Streamlit app."""
+    """Displays parsing results. (Unchanged)"""
     st.header("📊 AI Parsing Results")
     col1, col2, col3 = st.columns(3)
     avg_confidence = np.mean([o.parsing_confidence for o in offers if o.parsing_confidence is not None])
@@ -798,14 +770,13 @@ def display_parsing_results(offers: List[ParsedOffer], model_name: str):
     col1.metric("Average Confidence", f"{avg_confidence:.1%}")
     col2.metric("Total Warnings", warning_count)
     col3.metric("AI Model", model_name)
-
     with st.expander("📋 View Detailed Extracted Data (JSON)"):
         for offer in offers:
             st.subheader(f"📄 {offer.vendor or offer.filename}")
             st.json(asdict(offer))
 
 def display_gap_analysis(offers: List[ParsedOffer]):
-    # ... (Unchanged)
+    """Displays gap analysis. (Unchanged)"""
     st.header("🔍 Gap & Specification Analysis")
     grouped_offers = defaultdict(list)
     for offer in offers:
@@ -836,7 +807,7 @@ def display_gap_analysis(offers: List[ParsedOffer]):
                 st.text(diff_text)
 
 def display_cost_comparison(offers: List[ParsedOffer]):
-    # ... (Unchanged)
+    """Displays cost comparison. (Unchanged)"""
     st.header("💰 Cost Comparison")
     grouped_offers = defaultdict(list)
     for offer in offers:
