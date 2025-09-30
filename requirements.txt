@@ -1,6 +1,9 @@
 streamlit
 pandas
-openai
-pdfplumber
 openpyxl
 xlsxwriter
+pdfplumber
+python-dateutil
+openai
+pytesseract
+Pillow
