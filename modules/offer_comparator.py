@@ -1,11 +1,10 @@
-
 import pandas as pd
 import re
 import difflib
 from typing import List, Dict, Any, Tuple, Optional
 
 # Import the data model from the models module
-from .models import ParsedOffer
+from modules.models import ParsedOffer
 
 # A mapping to standardize common European currency symbols and codes
 CURRENCY_MAP = {
@@ -27,7 +26,6 @@ def calculate_similarity_score(s1: str, s2: str) -> float:
     def preprocess(text: str) -> str:
         text = text.lower()
         text = re.sub(r'[^a-z0-9\s]', '', text) # Remove punctuation
-        # Remove common, non-descriptive terms
         common_words = {'el', 'km', 'hp', 'auto', 'color', 'vehicle'}
         tokens = [word for word in text.split() if word not in common_words]
         return " ".join(tokens)
@@ -35,7 +33,6 @@ def calculate_similarity_score(s1: str, s2: str) -> float:
     s1_clean = preprocess(str(s1 or ''))
     s2_clean = preprocess(str(s2 or ''))
     
-    # Use SequenceMatcher for a robust comparison
     matcher = difflib.SequenceMatcher(None, s1_clean, s2_clean)
     return matcher.ratio() * 100
 
@@ -53,18 +50,31 @@ def get_offer_diff(ref_offer: ParsedOffer, comp_offer: ParsedOffer) -> str:
     for field in fields_to_compare:
         val1 = str(getattr(ref_offer, field, None) or "N/A").strip()
         val2 = str(getattr(comp_offer, field, None) or "N/A").strip()
-        # Only report a difference if values are not similar
         if calculate_similarity_score(val1, val2) < 95.0:
             diffs.append(f"• {field.replace('_', ' ').title()}: '{val1}' vs '{val2}'")
 
-    # --- Compare equipment lists ---
-    equip1 = {item['name'].strip().lower() for item in ref_offer.options_list + ref_offer.accessories_list}
-    equip2 = {item['name'].strip().lower() for item in comp_offer.options_list + comp_offer.accessories_list}
-    
-    if added := sorted(list(equip2 - equip1)):
-        diffs.append(f"• Equipment Added: {', '.join(added).title()}")
-    if removed := sorted(list(equip1 - equip2)):
-        diffs.append(f"• Equipment Removed: {', '.join(removed).title()}")
+    # --- Compare equipment lists (CORRECTED with safe access) ---
+    try:
+        # Safely extract equipment names, checking if item is a dict and has 'name' key.
+        equip1 = {
+            item.get('name', '').strip().lower() 
+            for item in (ref_offer.options_list or []) + (ref_offer.accessories_list or []) 
+            if isinstance(item, dict) and item.get('name')
+        }
+        equip2 = {
+            item.get('name', '').strip().lower() 
+            for item in (comp_offer.options_list or []) + (comp_offer.accessories_list or []) 
+            if isinstance(item, dict) and item.get('name')
+        }
+        
+        if added := sorted(list(equip2 - equip1)):
+            diffs.append(f"• Equipment Added: {', '.join(added).title()}")
+        if removed := sorted(list(equip1 - equip2)):
+            diffs.append(f"• Equipment Removed: {', '.join(removed).title()}")
+    except Exception as e:
+        # Log the error for debugging but don't crash the app
+        logging.error(f"Could not compare equipment lists: {e}")
+        diffs.append("• Could not compare equipment lists due to data format.")
         
     return "\n".join(diffs) if diffs else "No significant differences found in specifications."
 
@@ -80,24 +90,20 @@ class OfferComparator:
     def validate_offers(self) -> Tuple[bool, List[str]]:
         """
         Validates that a list of offers is suitable for a direct comparison.
-        Checks for consistency in currency, duration, and mileage.
         """
         errors = []
         if len(self.offers) < 2:
             errors.append("At least two offers are needed for a comparison.")
             return False, errors
 
-        # Check for consistent currency
         currencies = {normalize_currency(o.currency) for o in self.offers if o.currency}
         if len(currencies) > 1:
             errors.append(f"Mixed currencies detected: {', '.join(filter(None, currencies))}")
 
-        # Check for consistent duration
         durations = {o.offer_duration_months for o in self.offers if o.offer_duration_months}
         if len(durations) > 1:
             errors.append(f"Mismatched contract durations: {', '.join(map(str, durations))} months")
 
-        # Check for consistent mileage
         mileages = {o.offer_total_mileage for o in self.offers if o.offer_total_mileage}
         if len(mileages) > 1:
             errors.append(f"Mismatched contract mileages: {', '.join(map(str, mileages))} km")
@@ -110,15 +116,12 @@ class OfferComparator:
         """
         results = []
         for offer in self.offers:
-            # Prioritize 'total_monthly_lease' if available, otherwise use 'monthly_rental'
             monthly_rate = offer.total_monthly_lease if offer.total_monthly_lease is not None else offer.monthly_rental
             
-            # Ensure essential data for calculation is present
             if offer.offer_duration_months is None or monthly_rate is None:
                 results.append({'vendor': offer.vendor, 'filename': offer.filename, 'error': 'Missing duration or monthly rate'})
                 continue
 
-            # Calculate total cost components
             total_lease_cost = monthly_rate * offer.offer_duration_months
             total_upfront_cost = (offer.upfront_costs or 0) + (offer.deposit or 0) + (offer.admin_fees or 0)
             total_cost = total_lease_cost + total_upfront_cost
@@ -135,7 +138,6 @@ class OfferComparator:
                 'currency': offer.currency
             })
         
-        # Sort results by the lowest total cost
         return sorted(results, key=lambda x: x.get('total_contract_cost', float('inf')))
 
     def generate_comparison_report(self) -> pd.DataFrame:
@@ -148,7 +150,6 @@ class OfferComparator:
 
         df = pd.DataFrame(cost_data)
         
-        # Add a ranking column based on the total cost
         df['rank'] = df['total_contract_cost'].rank(method='min').astype(int)
         
         return df
