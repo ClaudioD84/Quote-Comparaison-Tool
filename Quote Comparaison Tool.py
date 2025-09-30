@@ -1,80 +1,191 @@
+import streamlit as st
 import json
 import logging
-import traceback
-import google.generativeai as genai
-from typing import Dict
+from typing import Dict, List, IO
 
-# Import the data model to structure the output
-from .models import ParsedOffer
+# --- Import Core Logic from Modules ---
+# CORRECTED: Changed relative imports to absolute
+from modules.llm_core import LLMParser
+from modules.models import ParsedOffer
+from modules.offer_comparator import OfferComparator, get_offer_diff, calculate_similarity_score
+from modules.pdf_parser import extract_text_from_pdf
+from modules.report_generator import generate_excel_report
 
-# Get a logger for this module
+# --- Configuration & Setup ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+RECIPES_FILE = 'config/recipes.json'
 
-class LLMParser:
+# --- Helper Functions ---
+@st.cache_data
+def load_recipes() -> Dict:
+    """Loads the recipes from the JSON file."""
+    try:
+        with open(RECIPES_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        st.error(f"Fatal Error: `{RECIPES_FILE}` not found. Please ensure it is in the 'config' directory.")
+        return {}
+    except json.JSONDecodeError:
+        st.error(f"Fatal Error: Could not parse `{RECIPES_FILE}`. Please check for syntax errors.")
+        return {}
+
+@st.cache_data
+def process_offers_internal(
+    _parser: LLMParser, 
+    uploaded_files: List[IO[bytes]], 
+    prompt_template: str
+    ) -> List[ParsedOffer]:
     """
-    A class to handle all interactions with the Google Gemini Large Language Model (LLM).
-    It executes the detailed instructions provided by a recipe prompt.
+    Internal function to process uploaded files using a single, powerful recipe prompt.
     """
+    offers = []
+    progress_bar = st.progress(0, "Initializing AI processing...")
+    total_files = len(uploaded_files)
 
-    def __init__(self, api_key: str):
-        """Initializes the Gemini client with the provided API key."""
-        if not api_key:
-            raise ValueError("A Google AI API key is required to use the LLM parser.")
-        self.api_key = api_key
-        genai.configure(api_key=self.api_key)
-        logger.info("Google Gemini client configured successfully.")
-
-    def parse_text(self, text: str, filename: str, prompt_template: str) -> ParsedOffer:
-        """
-        Sends the extracted text and a specific recipe prompt to the Gemini API
-        and parses the structured JSON response into a ParsedOffer object.
-        """
-        logger.info(f"Sending text from '{filename}' to Gemini for parsing using a customer-specific recipe.")
+    for i, uploaded_file in enumerate(uploaded_files):
+        filename = uploaded_file.name
+        progress_text = f"Processing {filename} with AI... ({i+1}/{total_files})"
+        progress_bar.progress((i + 1) / total_files, text=progress_text)
         
-        # The final prompt is a combination of the recipe and the document text
-        prompt_text = f"{prompt_template}\n\n<DOCUMENT_TO_PARSE>\n{text}\n</DOCUMENT_TO_PARSE>"
-
-        # This JSON schema enforces a consistent output structure from the AI
-        json_schema = {
-            "type": "OBJECT",
-            "properties": {
-                "filename": {"type": "STRING"}, "vendor": {"type": "STRING"}, "vehicle_description": {"type": "STRING"},
-                "max_duration_months": {"type": "NUMBER"}, "max_total_mileage": {"type": "NUMBER"}, "offer_duration_months": {"type": "NUMBER"},
-                "offer_total_mileage": {"type": "NUMBER"}, "monthly_rental": {"type": "NUMBER"}, "total_monthly_lease": {"type": "NUMBER"},
-                "currency": {"type": "STRING"}, "upfront_costs": {"type": "NUMBER"}, "deposit": {"type": "NUMBER"},
-                "admin_fees": {"type": "NUMBER"}, "excess_mileage_rate": {"type": "NUMBER"}, "unused_mileage_rate": {"type": "NUMBER"},
-                "quote_number": {"type": "STRING"}, "manufacturer": {"type": "STRING"}, "model": {"type": "STRING"},
-                "version": {"type": "STRING"}, "internal_colour": {"type": "STRING"}, "external_colour": {"type": "STRING"},
-                "fuel_type": {"type": "STRING"}, "num_doors": {"type": "NUMBER"}, "hp": {"type": "NUMBER"}, "c02_emission": {"type": "NUMBER"},
-                "battery_range": {"type": "NUMBER"}, "vehicle_price": {"type": "NUMBER"}, "options_price": {"type": "NUMBER"},
-                "accessories_price": {"type": "NUMBER"}, "delivery_cost": {"type": "NUMBER"}, "registration_tax": {"type": "NUMBER"},
-                "total_net_investment": {"type": "NUMBER"}, "taxation_value": {"type": "NUMBER"}, "financial_rate": {"type": "NUMBER"},
-                "depreciation_interest": {"type": "NUMBER"}, "maintenance_repair": {"type": "NUMBER"}, "insurance_cost": {"type": "NUMBER"},
-                "green_tax": {"type": "NUMBER"}, "management_fee": {"type": "NUMBER"}, "roadside_assistance": {"type": "NUMBER"},
-                "tyres_cost": {"type": "NUMBER"}, "maintenance_included": {"type": "BOOLEAN"}, "driver_name": {"type": "STRING"},
-                "customer": {"type": "STRING"},
-                "options_list": {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {"name": {"type": "STRING"}, "price": {"type": "NUMBER"}}}},
-                "accessories_list": {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {"name": {"type": "STRING"}, "price": {"type": "NUMBER"}}}},
-                "parsing_confidence": {"type": "NUMBER"}, "warnings": {"type": "ARRAY", "items": {"type": "STRING"}},
-            }
-        }
-
-        generation_config = genai.types.GenerationConfig(response_mime_type="application/json", response_schema=json_schema)
-        model = genai.GenerativeModel('gemini-1.5-pro-latest', generation_config=generation_config)
-
         try:
-            response = model.generate_content(prompt_text)
-            extracted_data = json.loads(response.text)
-            
-            # Ensure essential fields are set correctly
-            extracted_data.update({
-                'options_list': extracted_data.get('options_list') or [],
-                'accessories_list': extracted_data.get('accessories_list') or [],
-                'filename': filename
-            })
-            return ParsedOffer(**extracted_data)
+            raw_text = extract_text_from_pdf(uploaded_file)
+            if raw_text and raw_text.strip():
+                # The LLM uses the single prompt to handle all vendor variations
+                offer = _parser.parse_text(raw_text, filename, prompt_template)
+                offers.append(offer)
+            else:
+                st.warning(f"⚠️ Could not extract any text from '{filename}'.")
         except Exception as e:
-            logger.error(f"Error during Gemini API call for {filename}: {str(e)}")
-            logger.error(traceback.format_exc())
-            return ParsedOffer(filename=filename, warnings=[f"LLM parsing failed: {str(e)}"], parsing_confidence=0.1)
+            st.error(f"❌ Error processing {filename}: {str(e)}")
+            logger.error(f"File processing error for {filename}: {e}", exc_info=True)
+
+    progress_bar.empty()
+    return offers
+
+# --- Main Streamlit Application UI ---
+def main():
+    st.set_page_config(page_title="Leasing Quote Comparator", layout="wide")
+    st.title("🤖 AI-Powered Leasing Quote Comparison Tool")
+    st.markdown("Select a customer and country, then upload their offers to get a detailed, side-by-side comparison.")
+
+    recipes = load_recipes()
+    if not recipes:
+        st.stop()
+
+    # --- Sidebar for Configuration ---
+    with st.sidebar:
+        st.header("⚙️ Configuration")
+        try:
+            api_key = st.secrets["GOOGLE_API_KEY"]
+            st.success("✅ API Key loaded from secrets.")
+        except (FileNotFoundError, KeyError):
+            st.warning("API Key not found in secrets.")
+            api_key = st.text_input("Enter your Google AI API Key", type="password")
+
+        st.markdown("---")
+        st.header("Recipe Selection")
+        
+        # Dropdown for Customer
+        customers = list(recipes.keys())
+        selected_customer = st.selectbox("1. Select Customer", options=customers)
+        
+        # Dropdown for Country, dependent on Customer
+        countries = list(recipes.get(selected_customer, {}).keys())
+        selected_country = st.selectbox("2. Select Country", options=countries)
+
+    # --- Main Page for File Upload and Processing ---
+    st.header("📁 Upload Offer Documents")
+    ref_file = st.file_uploader("1. Upload Reference Offer (PDF)", type=['pdf'])
+    comp_files = st.file_uploader("2. Upload Competitor Offers (PDF)", type=['pdf'], accept_multiple_files=True)
+
+    if st.button("🚀 Compare Offers", type="primary"):
+        if not api_key: st.error("🚨 Please enter your Google AI API key in the sidebar.")
+        elif not ref_file: st.warning("⚠️ Please upload a reference offer.")
+        elif not comp_files: st.warning("⚠️ Please upload at least one competitor offer.")
+        elif not selected_customer or not selected_country: st.warning("⚠️ Please select a customer and country.")
+        else:
+            with st.spinner("AI is analyzing the documents... This may take a moment."):
+                try:
+                    parser = LLMParser(api_key=api_key)
+                    all_files = [ref_file] + comp_files
+                    
+                    # Fetch the single, powerful prompt for the selected customer/country
+                    prompt_template = recipes[selected_customer][selected_country]['prompt_template']
+                    
+                    st.session_state.offers = process_offers_internal(parser, all_files, prompt_template)
+                    
+                    if not st.session_state.offers:
+                         st.error("Processing complete, but no data was successfully extracted.")
+                    
+                except KeyError:
+                    st.error(f"Recipe not found for {selected_customer} in {selected_country}. Please check `recipes.json`.")
+                except Exception as e:
+                    st.error(f"An unexpected error occurred during processing: {e}")
+                    logger.error("Offer processing failed", exc_info=True)
+    
+    # --- Display Results ---
+    if 'offers' in st.session_state and st.session_state.offers:
+        st.success("🎉 Analysis complete!")
+        offers = st.session_state.offers
+        reference_offer = offers[0]
+        competitor_offers = offers[1:]
+
+        comparator = OfferComparator(offers)
+        is_valid, validation_errors = comparator.validate_offers()
+
+        tab1, tab2, tab3 = st.tabs(["📊 Cost Comparison", "🔍 Specification Gap Analysis", "📄 Raw Extracted Data"])
+
+        with tab1:
+            st.header("Cost and Financial Comparison")
+            if not is_valid:
+                st.warning("Offers may not be directly comparable due to inconsistencies.")
+                for error in validation_errors:
+                    st.error(f"• {error}")
+            
+            report_df = comparator.generate_comparison_report()
+            if not report_df.empty:
+                st.dataframe(report_df.style.format({
+                    'total_contract_cost': '{:,.2f}',
+                    'cost_per_month': '{:,.2f}',
+                    'cost_per_km': '{:,.4f}'
+                }), use_container_width=True)
+                
+                excel_bytes = generate_excel_report(offers)
+                st.download_button(
+                    label="⬇️ Download Full Comparison Report (Excel)",
+                    data=excel_bytes,
+                    file_name="Leasing_Comparison_Report.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+            else:
+                st.error("Could not generate a cost comparison report.")
+
+        with tab2:
+            st.header("Vehicle Specification Gap Analysis")
+            st.markdown(f"Comparing all offers against the reference: **{reference_offer.vehicle_description or 'N/A'}** from **{reference_offer.vendor or 'N/A'}**")
+            
+            for offer in competitor_offers:
+                st.markdown("---")
+                col1, col2 = st.columns([1, 2])
+                with col1:
+                    score = calculate_similarity_score(reference_offer.vehicle_description, offer.vehicle_description)
+                    st.metric(label=f"Similarity vs. {offer.vendor or offer.filename}", value=f"{score:.1f}%")
+                with col2:
+                    st.markdown(f"**Key Differences vs. Reference:**")
+                    diff_text = get_offer_diff(reference_offer, offer)
+                    if "No significant differences" in diff_text:
+                        st.success(f"✅ {diff_text}")
+                    else:
+                        st.text(diff_text)
+
+        with tab3:
+            st.header("Raw Extracted Data (JSON)")
+            st.info("This is the structured data extracted by the AI from each document.")
+            for offer in offers:
+                with st.expander(f"📄 {offer.filename} ({offer.vendor or 'Unknown Vendor'})"):
+                    st.json(offer.to_dict())
+
+if __name__ == "__main__":
+    main()
 
