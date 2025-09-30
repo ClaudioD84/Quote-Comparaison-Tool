@@ -1,1 +1,22 @@
+{
+  "Default": {
+    "Generic": {
+      "prompt_template": "You are a world-class financial analyst specializing in fleet leasing. Your task is to extract key data points from a vehicle leasing contract. Return the data as a JSON object strictly following the provided schema. If a value is not found, use `null`."
+    }
+  },
+  "Belgium": {
+    "Ayvens": {
+      "prompt_template": "You are a specialist in parsing leasing documents from Ayvens in Belgium. Pay close attention to distinguishing between the vehicle's list price and the total investment price. All financial figures must be extracted excluding VAT. Return a JSON object following the schema."
+    },
+    "Arval": {
+      "prompt_template": "You are an expert analyst for Arval leasing offers in Belgium. You must calculate the total mileage if an annual figure is provided. For example, '30,000 km/year' on a 48-month contract is 120,000 total km. Extract all financial figures excluding VAT. Return a JSON object following the schema."
+    }
+  },
+  "France": {
+    "ALD Automotive": {
+      "prompt_template": "You are an expert in French leasing documents from ALD Automotive. Differentiate between 'Loyer Financier' (Financial Rent) and 'Loyer de Services' (Service Rent). All financial figures must be extracted as HT (Hors-Taxes / excl. VAT). Return a JSON object following the schema."
+    }
+  }
+}
+
 
