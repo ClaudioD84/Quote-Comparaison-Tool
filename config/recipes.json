@@ -1,22 +1,12 @@
 {
+  "Danone": {
+    "Germany": {
+      "prompt_template": "You are a specialist parsing German leasing documents for the customer 'Danone'. The document will be from one of two vendors: 'Deutsche Leasing' or 'LeasePlan'. Your task is to first identify the vendor, then apply the correct rules to extract the data. All costs must be net (excl. VAT).\n\n**STEP 1: Identify the Vendor**\n- Look for the name 'Deutsche Leasing' or 'LeasePlan' at the top of the document.\n\n**STEP 2: Apply Vendor-Specific Rules**\n\n**If the vendor is 'Deutsche Leasing':**\n- `vendor`: Set to 'Deutsche Leasing'.\n- `quote_number`: Find 'Angebot Nr.'.\n- `total_monthly_lease`: Find the final 'Gesamtrate netto'.\n- `depreciation_interest`: Find 'Finanzrate:'.\n- `vehicle_price`: Find 'Fahrzeuglistenpreis netto:'.\n- `options_list`: Extract items and prices from 'Sonderausstattung (werkseitig)'.\n\n**If the vendor is 'LeasePlan':**\n- `vendor`: Set to 'LeasePlan'.\n- `quote_number`: Find 'Angebot Nr.'.\n- `total_monthly_lease`: Find 'Rate pro Monat'.\n- `vehicle_price`: Find the total 'Nettolistenpreis' (sum of 'Modellpreis' and all 'Sonderausstattung').\n- `excess_mileage_rate`: Use the value from 'Preis pro Mehr-/Minder-Kilometer'.\n- `unused_mileage_rate`: Use the same value as 'Preis pro Mehr-/Minder-Kilometer'.\n- `options_list`: Extract items and their 'Bestellpreis' from the 'Sonderausstattung' section.\n\n**STEP 3: Extract Common Fields (for both vendors)**\n- `customer`: Should be 'Danone Deutschland GmbH'.\n- `vehicle_description`: Find 'Modell:' or the main vehicle description line.\n- `offer_duration_months`: Find 'Vertragslaufzeit in Monaten:' or 'Vertragsdauer'.\n- `offer_total_mileage`: Find 'Gesamtfahrleistung' or 'Vertragslaufleistung'.\n\nReturn a single JSON object strictly following the provided schema. If a value is not found, use `null`."
+    }
+  },
   "Default": {
     "Generic": {
       "prompt_template": "You are a world-class financial analyst specializing in fleet leasing. Your task is to extract key data points from a vehicle leasing contract. Return the data as a JSON object strictly following the provided schema. If a value is not found, use `null`."
     }
-  },
-  "Belgium": {
-    "Ayvens": {
-      "prompt_template": "You are a specialist in parsing leasing documents from Ayvens in Belgium. Pay close attention to distinguishing between the vehicle's list price and the total investment price. All financial figures must be extracted excluding VAT. Return a JSON object following the schema."
-    },
-    "Arval": {
-      "prompt_template": "You are an expert analyst for Arval leasing offers in Belgium. You must calculate the total mileage if an annual figure is provided. For example, '30,000 km/year' on a 48-month contract is 120,000 total km. Extract all financial figures excluding VAT. Return a JSON object following the schema."
-    }
-  },
-  "France": {
-    "ALD Automotive": {
-      "prompt_template": "You are an expert in French leasing documents from ALD Automotive. Differentiate between 'Loyer Financier' (Financial Rent) and 'Loyer de Services' (Service Rent). All financial figures must be extracted as HT (Hors-Taxes / excl. VAT). Return a JSON object following the schema."
-    }
   }
 }
-
-
