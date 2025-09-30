@@ -1,6 +1,6 @@
 streamlit
 pandas
-google-generativeai
+openai
 pdfplumber
 openpyxl
 xlsxwriter
