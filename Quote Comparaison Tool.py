@@ -53,7 +53,7 @@ def process_offers_internal(
                 offer = _parser.parse_text(raw_text, filename, prompt_template)
                 offers.append(offer)
             else:
-                st.warning(f"⚠️ Could not extract any text from '{filename}'.")
+                st.warning(f"⚠️ Could not extract any text from '{filename}'. It may be image-based or complex.")
         except Exception as e:
             st.error(f"❌ Error processing {filename}: {str(e)}")
             logger.error(f"File processing error for {filename}: {e}", exc_info=True)
@@ -78,7 +78,7 @@ def main():
             api_key = st.secrets["OPENAI_API_KEY"]
             st.success("✅ OpenAI API Key loaded from secrets.")
         except (FileNotFoundError, KeyError):
-            st.warning("OpenAI API Key not found in secrets.")
+            st.warning("API Key not found in secrets.")
             api_key = st.text_input("Enter your OpenAI API Key", type="password")
 
         st.markdown("---")
@@ -123,6 +123,14 @@ def main():
     if 'offers' in st.session_state and st.session_state.offers:
         st.success("🎉 Analysis complete!")
         offers = st.session_state.offers
+        
+        if len(offers) < 2:
+            st.warning("Only one offer was processed. Please upload at least two for a comparison.")
+            # Display raw data for the single offer
+            with st.expander("📄 View Raw Extracted Data"):
+                st.json(offers[0].to_dict())
+            return
+
         reference_offer = offers[0]
         competitor_offers = offers[1:]
 
@@ -138,19 +146,17 @@ def main():
                 for error in validation_errors:
                     st.error(f"• {error}")
             
+            # Use the simple report for UI display
             report_df = comparator.generate_comparison_report()
             if not report_df.empty:
-                st.dataframe(report_df.style.format({
-                    'total_contract_cost': '{:,.2f}',
-                    'cost_per_month': '{:,.2f}',
-                    'cost_per_km': '{:,.4f}'
-                }), use_container_width=True)
+                st.dataframe(report_df, use_container_width=True, hide_index=True)
                 
+                # Use the ADVANCED report generator for the download button
                 excel_bytes = generate_excel_report(offers)
                 st.download_button(
-                    label="⬇️ Download Full Comparison Report (Excel)",
+                    label="⬇️ Download Full Formatted Comparison (Excel)",
                     data=excel_bytes,
-                    file_name="Leasing_Comparison_Report.xlsx",
+                    file_name=f"Comparison_{selected_customer}_{reference_offer.model or 'Vehicle'}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
             else:
